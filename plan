@@ -1,0 +1,69 @@
+Implement surface fitting
+
+Surface fitting needs associating faces with their
+induced neighborhoods, which demands a bit of extra
+combinatorial structure on our mesh
+
+face -> associated refined faces
+we can lay it out as a facetree or something?
+that's wasteful if we only keep the last layer
+
+Here's what we'll have - on the n-times refined mesh,
+we have a face-family-forest a few layers deep,
+and something linking faces in the original mesh to the
+right starting nodes in the face-family-tree
+
+There's a clear inductive structure here, but what is it?
+Mesh and associated forest, refine both together.
+
+The combinatorial structure likely is not enough, we also
+need some idea of the geometry, which is at least a local assignment
+of order that is compatible across layers of the forest
+
+We also need to make sure we start with a quad mesh or I don't have
+a strong account of what the fitting geometry is supposed to be like
+(probably matched with refinement of the control mesh? but who cares)
+
+It's not clear anymore that I need a faceforest at all:
+after all, I'm computing direct limit values on particular spots
+on quads, so I may get more use out of my Stam-style CatmullClark
+impl. In principle I could use a faceforest if instead
+of using the limit geometry I use an approximation, but
+I think I might go for the limit geometry if I already
+have a way to compute it.
+
+2026-06-27
+
+Turns out that doing the full Stam machinery is both annoying
+and unnecessary - it's possible to obtain limit stencils, so we
+just need to do two subdivisions and get the limit positions
+of the obtained vertices and we're set. In particular the relevant
+map over a chart can be precomputed for each valence.
+
+However, doing two subdivisions may be necessary anyway if we start
+off with just a triangle mesh, just to get enough regularity
+for uniform combinatorics without a huge casebash.
+
+Here's my compromise thought: do one subdivision for charts, and
+one more subdivision in which to obtain limit positions. Alternatively,
+if we remesh first, we do 0 subdivisions for charts and 2 for limit positions.
+
+What's the vocabulary that gets its hooks into this?
+
+We start with a base mesh. We have the base combinatorial mesh
+that is constant, and the base geometric mesh. The base combinatorial
+mesh gets refined into finer combinatorial meshes via inclusion,
+while the geometric mesh gets modified entirely. This means each
+base combinatorial vertex is associated with a sequence of geometric
+vertices corresponding to refinement levels.
+
+A simple, well-defined approach would be to say I have meshes A
+and A', such that each (f: face, corner : vertices(f)) pair in A
+yields a face in A'. Or more usefully, just half-edge -> half-edge. This
+lets us work with a plain dict and get on with it. We don't
+have to worry too much about fusing these into a many-level
+structure, since we're only going to use at most two or
+three levels anyway, and it's primarily precomputation.
+
+In principle I could try taking repeated stabs on abandonable
+branches with Claude help and see where that takes us.

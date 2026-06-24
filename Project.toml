@@ -1,0 +1,22 @@
+name = "jupiter"
+uuid = "ad234a27-ae0e-4ebf-9723-76d62c1910c1"
+version = "0.1.0"
+authors = ["kaarel <kaarelaugustkurik@gmail.com>"]
+
+[deps]
+FileIO = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
+GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+MeshIO = "7269a6da-0436-5bbc-96c2-40638cbb6118"
+TaylorDiff = "b36ab563-344f-407b-a36a-4f200bebf99c"
+TensorOperations = "6aa20fa7-93e2-5fca-9bc0-fbd0db3c71a2"
+TypedPolynomials = "afbbf031-7a57-5f58-a1b9-b774a0fad08d"
+
+[compat]
+FileIO = "1.19.0"
+GeometryBasics = "0.5.11"
+LinearAlgebra = "1.12.0"
+MeshIO = "0.5.3"
+TaylorDiff = "0.3.5"
+TensorOperations = "5.6.2"
+TypedPolynomials = "0.4.4"
