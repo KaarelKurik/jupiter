@@ -1,233 +1,31 @@
-using FileIO
-using GeometryBasics
-using LinearAlgebra
-using TensorOperations
-using TaylorDiff
 
 greet() = print("Hello World!")
 
 # Let's just make half-edges a thick concept, fuck it
 
-struct Mesh{T} # both vertices and faces consecutively 1-indexed
-    vertices::Vector{Vector{T}}
-    faces::Vector{Vector{UInt32}} # ccw
-    vertex_neighbors::Vector{Set{UInt32}}
+struct Surface
+    mesh
+    chart_polys
 end
 
-struct HalfEdge
-    mesh::Mesh
-    next::HalfEdge
-    prev::HalfEdge
-    twin::HalfEdge
-    vertex_index
-end
-
-struct Refinement
-    quarter_edge::Dict{HalfEdge, HalfEdge}
+struct HalfThroat
+    surface
 end
 
 struct Chart
-    half_throat
-    half_edge
-    poly
+    half_throat::HalfThroat
+    half_edge_handle::HalfEdgeHandle
 end
 
 struct SituatedPhase
-    chart
+    chart::Chart
     pos
     vel
 end
 
 struct SituatedPos
-    chart
+    chart::Chart
     pos
-end
-
-struct SituatedPhaseVel
-    chart
-    posvel
-    velvel
-end
-
-struct SituatedTangent
-    chart
-    vel
-end
-
-
-struct HalfThroat
-    mesh
-end
-
-function mean(x)
-    sum(x)/length(x)
-end
-
-function vertex_neighbors(faces::Vector{Vector{UInt32}}, vertex_total)
-    neighbors::Vector{Set{UInt32}} = [Set{UInt32}() for i = 1:vertex_total]
-    for f in faces
-        for i = 1:length(f)
-            cv = f[i]
-            nv = f[(i % length(f)) + 1]
-            push!(neighbors[cv], nv)
-            push!(neighbors[nv], cv)
-        end
-    end
-    neighbors
-end
-
-Mesh(vertices::Vector{Vector{T}}, faces::Vector{Vector{UInt32}}) where {T} = begin
-    Mesh(vertices, faces, vertex_neighbors(faces, length(vertices)))
-end
-
-function catmullclark(m::Mesh) # returns a new mesh, assumes closed input
-    face_vertices = map(m.faces) do face
-        verts = m.vertices[face]
-        mean(verts)
-    end
-    mesh_edges = edges(m)
-    he_to_face = half_edge_to_face(m)
-    edge_vertices = Dict(
-        begin
-            a,b = edge
-            fa = he_to_face[(a,b)]
-            fb = he_to_face[(b,a)]
-            points = [face_vertices[fa], face_vertices[fb], m.vertices[a], m.vertices[b]]
-            edge => mean(points)
-        end
-        for edge in mesh_edges
-    )
-    v_to_faces = vertex_to_faces(m)
-    v_to_vertices = vertex_to_vertices(m)
-    v_vertices = map(pairs(m.vertices)) do (ix,v)
-        face_neighbors = v_to_faces[ix]
-        vertex_neighbors = v_to_vertices[ix]
-        face_average = mean(map(nix -> face_vertices[nix], face_neighbors))
-        edge_average = mean(map(nix -> (v + m.vertices[nix])/2, vertex_neighbors))
-        n = length(face_neighbors)
-        ((n-3)*v + 2*edge_average + face_average)/n
-    end
-
-    fixed_ev_pairs = pairs(edge_vertices)
-    all_vertices = [face_vertices ; map(x -> x[2], fixed_ev_pairs) ; v_vertices]
-    block_lengths = [length(face_vertices), length(fixed_ev_pairs), length(v_vertices)]
-    block_ends = accumulate(+, block_lengths)
-    face_vixes = [i for i in 1:block_ends[1]]
-    edge_vixes = Dict(zip(map(x -> x[1], fixed_ev_pairs), (block_ends[1]+1):block_ends[2]))
-    v_vixes = [i for i in (block_ends[2]+1):block_ends[3]]
-
-    old_v_to_new_v = v_vixes
-
-    he_to_next = half_edge_to_next(m)
-
-    new_faces = map(pairs(he_to_face)) do (he,f)
-        nhe = he_to_next[he]
-        edge = sort(he)
-        nedge = sort(nhe)
-        point_indices = [face_vixes[f], edge_vixes[edge], v_vixes[he[2]], edge_vixes[nedge]]
-        point_indices
-    end
-
-    # for every half-edge in the original,
-    # produce a half-edge in the new that is a shortening of the original,
-    # hence "quarter edge"
-    quarter_edges = Dict()
-    for face in m.faces
-        rim = facerim(face)
-        for he in rim
-            edge = sort(he)
-            quarter_edges[he] = (old_v_to_new_v[he[1]], edge_vixes[edge])
-        end
-    end
-
-    (refined_mesh=Mesh(all_vertices, new_faces), quarter_edges=quarter_edges)
-end
-
-function fit_geometry(m::Mesh, ) # this is classic YZ, so assumes quad mesh to start with
-end
-
-function half_edges(m::Mesh)
-    out = []
-    for face in m.faces
-        for j in 1:length(face)
-            half_edge = (face[j], face[(j%length(face))+1])
-            push!(out, half_edge)
-        end
-    end
-    out
-end
-
-function facerim(f)
-    out = []
-    for j in 1:length(f)
-        push!(out, (f[j], f[(j%length(f))+1]))
-    end
-    out
-end
-
-function edges(m::Mesh)
-    out = Set()
-    for face in m.faces
-        for j in 1:length(face)
-            half_edge = (face[j], face[(j%length(face))+1])
-            push!(out, sort(half_edge))
-        end
-    end
-    out
-end
-
-function half_edge_to_face(m::Mesh)
-    out = Dict()
-    for (ix,face) in pairs(m.faces)
-        for j in 1:length(face)
-            half_edge = (face[j], face[(j%length(face))+1])
-            out[half_edge] = ix
-        end
-    end
-    out
-end
-
-function half_edge_to_next(m::Mesh)
-    out = Dict()
-    for face in m.faces
-        for j in 1:length(face)
-            a,b = (face[j], face[(j%length(face))+1])
-            c = face[((j+1)%length(face))+1]
-            out[(a,b)] = (b,c)
-        end
-    end
-    out
-end
-
-function vertex_to_faces(m::Mesh)
-    out = Dict()
-    for (ix, face) in pairs(m.faces)
-        for v in face
-            neighbors = get!(out, v) do
-                []
-            end
-            push!(neighbors, ix)
-        end
-    end
-    out
-end
-
-function vertex_to_vertices(m::Mesh)
-    out = Dict()
-    for face in m.faces
-        for j in 1:length(face)
-            a, b = (face[j], face[(j%length(face))+1])
-            a_neighbors = get!(out, a) do
-                Set()
-            end
-            b_neighbors = get!(out, b) do
-                Set()
-            end
-            push!(a_neighbors, b)
-            push!(b_neighbors, a)
-        end
-    end
-    out
 end
 
 function wedge_index_and_angle(n_wedges, pos)
@@ -237,15 +35,24 @@ function wedge_index_and_angle(n_wedges, pos)
     (ix, remainder)
 end
 
+function polynomial_surface(chart, uv)
+    @polyvar u v
+    [p(u => uv[1], v => v[2]) for p in surface_polynomials(chart)]
+end
+
 function surface(env, chart, uv)
-    chart.poly(u => uv[1], v => uv[2])
+    #todo by blending
+end
+
+function surface_polynomials(chart::Chart)
+    half_throat(chart).chart_polys[vertex_index(chart)]
 end
 
 function surface_normal_out(env, chart, uv)
     s = Base.Fix1(Base.Fix1(surface, env), chart)
     du = derivative(s, uv, [1., 0.], Val(1))
     dv = derivative(s, uv, [0., 1.], Val(1))
-    cross(du, dv)
+    normalize(cross(du, dv)) # normalize probably doesn't work with TaylorDiff
 end
 
 function collar(env, chart, pos)
@@ -262,9 +69,10 @@ end
 function inner_metric(env, chart, pos)
     sf = Base.Fix1(Base.Fix1(surface, env), chart)
     params = inner_metric_params(env, chart)
-    out = zeros(3,3)
-    sf_jac = reduce(hcat, [derivative(sf, pos[1:2], [Float64(i == j) for i in 1:2], Val(1))] for j in 1:2)
-    out[1:2, 1:2] = params.cross_scale * sf_jac
+    sf_jac = reduce(hcat, [derivative(sf, pos[1:2], [Float64(i == j) for i in 1:2], Val(1)) for j in 1:2])
+    g = params.cross_scale * sf_jac' * sf_jac
+    out = zeros(promote_type(eltype(g), typeof(params.depth_scale)), 3, 3)
+    out[1:2, 1:2] = g
     out[3,3] = params.depth_scale
     out
 end
@@ -277,10 +85,10 @@ end
 
 function christoffel(env, v::SituatedPhase)
     mf = Base.Fix1(Base.Fix1(metric, env), v.chart)
-    metric_derivs = reduce(hcat, [derivative(mf, v.pos, [Float64(i == j) for i in 1:3], Val(1)) for j in 1:3])
+    metric_derivs = stack([derivative(mf, v.pos, [Float64(i == j) for i in 1:3], Val(1)) for j in 1:3])
     inv_m = inv(mf(v.pos))
     @tensor begin
-        cs[k,i,j] := 0.5 * inv_m[k,u] * (metric_derivs[i,j,u] + metric_derivs[j,u,i] - metric_derivs[u,i,j])
+        cs[k,i,j] := 0.5 * inv_m[k,u] * (metric_derivs[u,i,j] + metric_derivs[j,u,i] - metric_derivs[i,j,u])
     end
     cs
 end
@@ -293,7 +101,7 @@ function wvel_along_v(env, v::SituatedPhase, w::SituatedPhase)
     wvel
 end
 
-function wedge_map(source_n, target_n, pos) # need to check if this works as expected with TaylorDiff
+function reference_wedge_map(source_n, target_n, pos) # this doesn't work with TaylorDiff
     a0 = complex(pos[1], pos[2])
     a1 = a0^(source_n / 4)
     a2 = 1/sqrt(2) - a1
@@ -301,24 +109,29 @@ function wedge_map(source_n, target_n, pos) # need to check if this works as exp
     [real(a3), imag(a3)]
 end
 
-function valence(mesh::Mesh, vertex_index)
-    length(mesh.vertex_neighbors[vertex_index])
+safe_atan2(y, x) = 2 * atan(y / (sqrt(x^2 + y^2) + x))
+
+function fake_complex_pow(z, power)
+    α = safe_atan2(z[2], z[1])
+    n = sqrt(z[1]^2 + z[2]^2)
+    β = power * α
+    s,c = sincos(β)
+    n^power * [c, s]
+end
+
+function wedge_map(source_n, target_n, pos) # ideally this would work with TaylorDiff
+    a1 = fake_complex_pow(pos, source_n/4)
+    a2 = [1/sqrt(2), 0] - a1
+    a3 = fake_complex_pow(a2, 4/target_n)
+    a3
 end
 
 function vertex_index(chart::Chart)
-    half_edge(chart).vertex_index
+    vertex_index(half_edge_handle(chart))
 end
 
 function valence(chart::Chart)
     valence(mesh(chart), vertex_index(chart))
-end
-
-function twin(half_edge::HalfEdge)
-    half_edge.twin
-end
-
-function prev(half_edge::HalfEdge)
-    half_edge.prev
 end
 
 function half_throat(chart::Chart)
@@ -333,30 +146,26 @@ function mesh(chart::Chart)
     mesh(half_throat(chart))
 end
 
-function half_edge(chart::Chart)
-    chart.half_edge
+function half_edge_handle(chart::Chart)
+    chart.half_edge_handle
 end
 
-function half_edge_ccw(half_edge::HalfEdge, rotcount)
-    cur = half_edge
-    for i = 1:rotcount
-        cur = twin(prev(half_edge))
-    end
-    cur
+function induced_chart(half_throat::HalfThroat, vertex_index::Int)
+    half_throat.charts[vertex_index]
 end
 
-function chart_by_half_edge(half_throat::HalfThroat, half_edge::HalfEdge)
-    Chart(half_throat, half_edge)
+function induced_chart(half_edge_handle::HalfEdgeHandle)
+    #todo
 end
 
-function neighbor_chart(chart::Chart, target_index)
-    ce = half_edge_ccw(half_edge(chart), target_index)
-    chart_by_half_edge(half_throat, twin(ce))
+function neighbor_chart(chart::Chart, target_offset)
+    ce = ccw(half_edge_handle(chart), target_offset)
+    induced_chart(half_throat(chart), vertex_index(twin(ce)))
 end
 
-function view_phase_at_target(v::SituatedPhase, chart_valence, target_index)
+function view_phase_at_target(v, chart_valence, target_offset)
     central_angle = 2pi / chart_valence
-    s,c = sincos(-central_angle * target_index)
+    s,c = sincos(-central_angle * target_offset)
     rotation = [
         c -s 0
         s c 0
@@ -367,14 +176,117 @@ function view_phase_at_target(v::SituatedPhase, chart_valence, target_index)
     (pos=rpos, vel=rvel)
 end
 
-function chart_transition(v::SituatedPhase, target_index) # no check on input validity
+function chart_transition(v::SituatedPhase, target_offset) # no check on input validity
     # index local and ccw, starting with 0
+    shared_edge_near = ccw(half_edge_handle(v.chart), target_offset)
+    shared_edge_far = twin(shared_edge_near)
+    neighbor = induced_chart(shared_edge_far)
     source_n = valence(v.chart)
-    neighbor = neighbor_chart(v.chart, target_index)
     target_n = valence(neighbor)
-    v_adj = view_phase_at_target(v, chart_valence, target_index)
+    v_near_adj = view_phase_at_target(v, source_n, target_offset)
     wm = Base.Fix1(Base.Fix1(wedge_map, source_n), target_n)
-    newpos = wm(v_adj.pos)
-    newvel = [derivative(wm, v_adj.pos, v_adj.vel, Val(1)) ; v_adj.vel[3]]
-    SituatedPhase(neighbor, newpos, newvel)
+    v_far_adj_pos = [wm(v_near_adj.pos) ; v_near_adj.pos[3]]
+    v_far_adj_vel = [derivative(wm, v_near_adj.pos, v_near_adj.vel, Val(1)) ; v_near_adj.vel[3]]
+    far_offset = half_edge_offset(shared_edge_far)
+    v_far = view_phase_at_target((pos=v_far_adj_pos, vel=v_far_adj_vel), valence(neighbor), -far_offset)
+    SituatedPhase(neighbor, v_far.pos, v_far.vel)
+end
+
+"""
+x:3, y:4, wedge:valence
+"""
+function nonzero_fitting_points(valence)
+    trunc_square = [i/4 + (j/4) * 1im for i=1:3, j=0:3]/sqrt(2)
+    wedge = map(z -> z^(4/valence), trunc_square)
+    wedges =  map(x -> [real(x), imag(x)], stack(wedge * cispi(2 * i / valence) for i = 0:(valence-1)))
+    wedges
+end
+
+function fitting_points(valence)
+    [[[0,0]] ; vec(nonzero_fitting_points(valence))]
+end
+
+function monomial_run(total_degree)
+    @polyvar u v
+    run = sort(reduce(vcat, [u^k * v^(s-k) for k = 0:s] for s=0:total_degree))
+    run
+end
+
+"""
+points by monos
+"""
+function monomial_value_matrix(valence, total_degree)
+    @polyvar u v
+    run = monomial_run(total_degree)
+    fp = fitting_points(valence)
+    mvm = [m((u,v)=>p) for p in fp, m in run]
+    mvm
+end
+
+function yz_degree_bound(valence)
+    min(14, valence+1)
+end
+
+"""
+we should precompute and cache these
+
+shape is monos by points
+"""
+function yz_fitting_matrix(valence)
+    td = yz_degree_bound(valence)
+    pinv(monomial_value_matrix(valence, td))
+end
+
+"""
+yields indices for nonzero part of one wedge with
+x:3, y:4
+"""
+function grid_fitting_indices(grid_handle::HalfEdgeHandle)
+    base = accumulate((x,_)->cw(next(x)), 1:3, init=grid_handle)
+    grid_arrangement = map(base) do bh
+        [bh ; accumulate((x,_)->twin(next(next(x))), 1:3, init=bh)]
+    end
+    grid = [grid_arrangement[i][j] for i=1:3, j=1:4]
+    vertex_indices = [h.name[1] for h in grid]
+    vertex_indices
+end
+
+"""
+x:3, y:4, wedge:valence(h)
+"""
+function chart_nonzero_fitting_indices(h::HalfEdgeHandle)
+    fan = handlefan(h)
+    stack(map(grid_fitting_indices, fan))
+end
+
+"""
+call on refined mesh handle
+"""
+function chart_fitting_indices(h::HalfEdgeHandle)
+    [[vertex_index(h)] ; vec(chart_nonzero_fitting_indices(h))]
+end
+
+function chart_fit_polynomials(h::HalfEdgeHandle)
+    fm = yz_fitting_matrix(valence(h)) # monos by points
+    indices = chart_fitting_indices(h)
+    # this'll work but the limit positions ought to be precomputed over the whole mesh, I figure
+    limit_positions = stack(map(ix -> limit_position(h.mesh, ix), indices))' # points by 3
+    run = monomial_run(yz_degree_bound(valence(h))) # monos
+    coefs = fm * limit_positions # monos by 3
+    vec(sum(run .* coefs, dims=1))
+end
+
+"""
+returns chart polynomials in vertex order
+"""
+function fit_geometry(m::Mesh) # this is classic YZ, so assumes quad mesh to start with
+    r1 = catmullclark(m)
+    r2 = catmullclark(r1.refined_mesh)
+
+    base_handles = [vertex_induced_handle(m, ix) for ix in 1:length(m.vertices)]
+    grid_handle_names = [r2.quarter_edge_map[r1.quarter_edge_map[bh.name]] for bh in base_handles]
+    grid_handles = [HalfEdgeHandle(r2.refined_mesh, shn) for shn in grid_handle_names]
+
+    chart_polys = [chart_fit_polynomials(h) for h in grid_handles]
+    chart_polys
 end
