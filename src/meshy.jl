@@ -124,6 +124,19 @@ Mesh(metamesh::MetaMesh) = begin
     Mesh(vertices, faces)
 end
 
+function save_obj(path, vertices, faces)
+    open(path, "w") do io
+        for v in vertices
+            println(io, "v ", v[1], " ", v[2], " ", v[3])
+        end
+        for f in faces
+            println(io, "f ", join(f, " "))
+        end
+    end
+end
+
+save_obj(path, m::Mesh) = save_obj(path, m.vertices, m.faces)
+
 function edges(m::Mesh)
     out = Set()
     for face in m.faces
@@ -193,12 +206,12 @@ end
 function cubemesh()
     vertices::Vector{Vector{Float64}} = vec([Float64[i,j,k] for i in (-1,1), j in (-1,1), k in (-1,1)])
     faces::Vector{Vector{Int}} = [ # no particular order
-        [1,2,4,3],
-        [5,6,2,1],
-        [7,5,1,3],
-        [7,8,6,5],
-        [4,2,6,8],
-        [3,4,8,7]
+        [1,3,4,2],
+        [5,1,2,6],
+        [7,3,1,5],
+        [7,5,6,8],
+        [4,8,6,2],
+        [3,7,8,4]
     ]
     Mesh(vertices, faces)
 end

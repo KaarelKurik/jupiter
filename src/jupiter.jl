@@ -4,7 +4,7 @@ using FileIO
 using GeometryBasics
 using LinearAlgebra
 using TensorOperations
-using TaylorDiff
+using ForwardDiff
 using TypedPolynomials
 
 include("meshy.jl")
