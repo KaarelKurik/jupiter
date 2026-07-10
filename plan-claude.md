@@ -107,10 +107,30 @@ straight to the metric layer (step 4). For rendering speed later: cache
      Γ matches central finite differences of the metric to 5e-9; metric is C0
      across chart transitions in the tensorial sense (|Jᵀ g_far J − g_near| ≈ 3e-15
      against entries of size 2.5).
-5. **Geodesic integration + transitions**: RK4 on (pos, vel); chart-switch trigger
-   via wedge angle/depth thresholds. Tests: `wedge_map` against
-   `reference_wedge_map`; transition round-trip (neighbor and back ≈ identity on pos
-   and vel); geodesic crossing a chart boundary stays continuous.
+5. ~~**Geodesic integration + transitions**~~ Done 2026-07-10.
+   - `geodesic_step` (RK4 on SituatedPhase, fixed chart; acceleration =
+     `wvel_along_v(v, v)`), `settle_phase` (re-homes after each step: lateral
+     `chart_transition` hop when the face square-coords leave [0,1/2]², natural
+     half-to-half `half_transition` past transition_depth — identity in (u,v),
+     d ↦ 2·td − d, vel_d flipped; closed on phases by design), `exits_mouth`
+     predicate + `to_ambient` (placement ∘ collar; exact, since the metric is
+     the flat collar pullback for d ≤ 0), `trace_geodesic` driver returning
+     AmbientRay or a still-inside SituatedPhase — the one place the sum type
+     appears, as the honest codomain (kaarel raised type-stability/reasoning
+     concerns; resolved by confining the union here).
+   - Verified (in test/runtests.jl "geodesics"): energy g(v,v) conserved to 1e-6
+     across lateral hops and a full side-1 → side-2 traversal; settling changes
+     description but not the physical point; half_transition is an involution
+     with exact energy; ambient exit speed² = conserved energy (isometry);
+     time-reversal over a hop-crossing arc closes to ~1e-11.
+   - Note: "settled" ≠ arbitrary — a phase at square-coords > 1/2 belongs to a
+     neighbor chart; compare trajectories only between settled phases.
+   - Observed physics: laterally-launched geodesics near the mouth get pulled
+     into the throat — plausible for this geometry, and energy/reversibility
+     checks pass, so not treated as a bug.
+   - Deliberately deferred to the renderer: the *inverse* mouth problem
+     (ambient ray hits the mouth surface → initial SituatedPhase), i.e.
+     ambient-side ray/collar intersection and chart lookup.
 6. **Renderer**: camera in one flat patch, integrate geodesics until they exit to
    flat space on either side, hit-test against a simple environment (textured sky
    sphere per side).

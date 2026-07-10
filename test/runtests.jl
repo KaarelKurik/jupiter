@@ -101,6 +101,68 @@ end
     @test maximum(abs, cs - cs_fd) < 1e-6
 end
 
+@testset "geodesics" begin
+    energy(v) = v.vel' * J.metric(nothing, v.chart, v.pos) * v.vel
+
+    # lateral trace crossing into a neighbor chart conserves energy
+    v0 = J.settle_phase(nothing, J.SituatedPhase(c, [0.3, 0.02, 0.25], [0.5, 0.2, 0.0]))
+    e0 = energy(v0)
+    v = v0
+    hopped = false
+    for _ in 1:200
+        v = J.settle_phase(nothing, J.geodesic_step(nothing, v, 0.01))
+        hopped |= J.vertex_index(v.chart) != J.vertex_index(v0.chart)
+    end
+    @test hopped
+    @test abs(energy(v) - e0) / e0 < 1e-6
+
+    # settling is a change of description, not of physical point
+    vfar = J.SituatedPhase(c, [0.5, 0.05, 0.2], [0.1, 0.2, 0.3])
+    vset = J.settle_phase(nothing, vfar)
+    @test J.vertex_index(vset.chart) != J.vertex_index(vfar.chart)
+    @test maximum(abs, J.surface(nothing, vfar.chart, vfar.pos[1:2]) -
+                       J.surface(nothing, vset.chart, vset.pos[1:2])) < 1e-12
+    @test vset.pos[3] == vfar.pos[3]
+    @test abs(energy(vset) - energy(vfar)) / energy(vfar) < 1e-12
+
+    # half-to-half handover: involution, side flip, exact energy in the cylinder region
+    vd = J.SituatedPhase(c, [0.2, 0.15, 0.7], [0.1, 0.05, 0.5])
+    vh = J.half_transition(vd)
+    vhh = J.half_transition(vh)
+    @test J.side(J.half_throat(vh.chart)) == 2
+    @test maximum(abs, [vhh.pos - vd.pos; vhh.vel - vd.vel]) == 0
+    @test abs(energy(vh) - energy(vd)) < 1e-14
+
+    # mouth exit: outward geodesic becomes an AmbientRay whose flat speed
+    # matches the conserved energy (collar pullback is isometric)
+    vout = J.SituatedPhase(c, [0.2, 0.15, 0.2], [0.05, 0.05, -0.6])
+    r = J.trace_geodesic(nothing, vout, 0.01, 200)
+    @test r isa J.AmbientRay
+    @test J.side(J.half_throat(r)) == 1
+    @test abs(sum(abs2, r.vel) - energy(vout)) / energy(vout) < 1e-6
+
+    # full traversal: in through mouth 1, out through mouth 2
+    vin = J.SituatedPhase(c, [0.2, 0.15, 0.01], [0.05, 0.05, 0.8])
+    r2 = J.trace_geodesic(nothing, vin, 0.02, 400)
+    @test r2 isa J.AmbientRay
+    @test J.side(J.half_throat(r2)) == 2
+    @test abs(sum(abs2, r2.vel) - energy(vin)) / energy(vin) < 1e-6
+
+    # reversibility over a short arc that includes a chart hop
+    va = J.settle_phase(nothing, J.SituatedPhase(c, [0.3, 0.02, 0.25], [0.5, 0.2, 0.1]))
+    vb = va
+    for _ in 1:20
+        vb = J.settle_phase(nothing, J.geodesic_step(nothing, vb, 0.01))
+    end
+    vr = J.SituatedPhase(vb.chart, vb.pos, -vb.vel)
+    for _ in 1:20
+        vr = J.settle_phase(nothing, J.geodesic_step(nothing, vr, 0.01))
+    end
+    @test J.vertex_index(vr.chart) == J.vertex_index(va.chart)
+    @test maximum(abs, vr.pos - va.pos) < 1e-9
+    @test maximum(abs, vr.vel + va.vel) < 1e-9
+end
+
 @testset "metric tensoriality across transition" begin
     pe = [0.3, 0.02, 0.25]
     vp(k) = J.SituatedPhase(c, pe, Float64.(1:3 .== k))

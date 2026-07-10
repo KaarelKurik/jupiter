@@ -55,6 +55,12 @@ struct SituatedPos
     pos
 end
 
+struct AmbientRay # left through a mouth; pos/vel in the ambient flat space of half_throat's placement
+    half_throat::HalfThroat
+    pos
+    vel
+end
+
 function wedge_index_and_angle(n_wedges, pos)
     α = atan(pos[2], pos[1])
     ix = floor((α * n_wedges)/(2pi))
@@ -218,6 +224,68 @@ function wvel_along_v(env, v::SituatedPhase, w::SituatedPhase)
         wvel[k] := -v.vel[i] * w.vel[j] * c[k,i,j]
     end
     wvel
+end
+
+function to_ambient(env, v::SituatedPhase)
+    pl = placement(half_throat(v.chart))
+    cl = Base.Fix1(Base.Fix1(collar, env), v.chart)
+    AmbientRay(half_throat(v.chart), pl.linear * cl(v.pos) + pl.translation, pl.linear * directional(cl, v.pos, v.vel))
+end
+
+function half_transition(v::SituatedPhase) # the gluing is natural: identity in (u,v), reversal in d
+    td = params(half_throat(v.chart)).transition_depth
+    c2 = Chart(other_half(half_throat(v.chart)), half_edge_handle(v.chart))
+    SituatedPhase(c2, [v.pos[1], v.pos[2], 2 * td - v.pos[3]], [v.vel[1], v.vel[2], -v.vel[3]])
+end
+
+exits_mouth(v::SituatedPhase) = v.pos[3] < 0 && v.vel[3] <= 0 # once here, the flat outer region owns the ray
+
+"""
+re-express v in a chart that contains it comfortably: hop laterally while the
+containing face's square coords leave [0, 1/2]^2, hand over to the other half
+past transition_depth; closed on phases, so mouth exit is the caller's concern
+"""
+function settle_phase(env, v::SituatedPhase, max_hops=8)
+    for _ in 1:max_hops
+        if v.pos[3] > params(half_throat(v.chart)).transition_depth
+            v = half_transition(v)
+            continue
+        end
+        n = valence(v.chart)
+        wix, _ = wedge_index_and_angle(n, v.pos)
+        k = Int(mod(wix, n))
+        st = wedge_square_coords(n, k, v.pos)
+        maximum(st) <= 0.5 && return v
+        v = chart_transition(v, st[1] >= st[2] ? k : Int(mod(k + 1, n)))
+    end
+    v # hop budget exhausted; shouldn't happen for step sizes small next to a face
+end
+
+function geodesic_flow(env, v::SituatedPhase)
+    (v.vel, wvel_along_v(env, v, v))
+end
+
+function geodesic_step(env, v::SituatedPhase, h) # one RK4 step, staying in v's chart
+    stage(k, s) = SituatedPhase(v.chart, v.pos + s * k[1], v.vel + s * k[2])
+    k1 = geodesic_flow(env, v)
+    k2 = geodesic_flow(env, stage(k1, h / 2))
+    k3 = geodesic_flow(env, stage(k2, h / 2))
+    k4 = geodesic_flow(env, stage(k3, h))
+    dpos = (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]) / 6
+    dvel = (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]) / 6
+    SituatedPhase(v.chart, v.pos + h * dpos, v.vel + h * dvel)
+end
+
+function trace_geodesic(env, v::SituatedPhase, h, max_steps)
+    for _ in 1:max_steps
+        v = settle_phase(env, geodesic_step(env, v, h))
+        exits_mouth(v) && return to_ambient(env, v)
+    end
+    v # still inside; caller decides whether that's a problem
+end
+
+function half_throat(ray::AmbientRay)
+    ray.half_throat
 end
 
 function reference_wedge_map(source_n, target_n, pos) # complex powers don't differentiate; test oracle only
