@@ -163,6 +163,34 @@ end
     @test maximum(abs, vr.vel + va.vel) < 1e-9
 end
 
+@testset "mouth entry" begin
+    mouth = J.Mouth(nothing, ht, 8)
+    uv0 = [0.1, 0.05]
+    pos0 = [uv0; 0.0]
+    vel0 = [0.02, 0.01, 0.6]
+    # build the entering ray by exiting in reverse, then check entry inverts it
+    r = J.to_ambient(nothing, J.SituatedPhase(c, pos0, -vel0))
+    dir = -r.vel
+    origin = r.pos + 2 * r.vel
+    vin = J.enter_mouth(nothing, mouth, origin, dir)
+    @test vin isa J.SituatedPhase
+    @test maximum(abs, J.surface(nothing, vin.chart, vin.pos[1:2]) -
+                       J.surface(nothing, c, uv0)) < 1e-9
+    @test abs(vin.pos[3]) < 1e-9
+    rr = J.to_ambient(nothing, J.SituatedPhase(vin.chart, vin.pos, -vin.vel))
+    @test maximum(abs, rr.pos - r.pos) < 1e-9
+    @test maximum(abs, rr.vel - r.vel) < 1e-9
+    # flat speed^2 matches chart-metric energy (collar isometry)
+    @test abs(vin.vel' * J.metric(nothing, vin.chart, vin.pos) * vin.vel -
+              sum(abs2, dir)) < 1e-12
+    # ray pointing away from the surface misses
+    @test J.enter_mouth(nothing, mouth, origin, -dir) === nothing
+    # full pipeline: ambient ray enters side 1, exits as an ambient ray on side 2
+    r2 = J.trace_geodesic(nothing, vin, 0.02, 400)
+    @test r2 isa J.AmbientRay
+    @test J.side(J.half_throat(r2)) == 2
+end
+
 @testset "metric tensoriality across transition" begin
     pe = [0.3, 0.02, 0.25]
     vp(k) = J.SituatedPhase(c, pe, Float64.(1:3 .== k))

@@ -288,6 +288,89 @@ function half_throat(ray::AmbientRay)
     ray.half_throat
 end
 
+struct MouthTriangle # one tessellation triangle of a mouth, with its chart provenance
+    corners # ambient positions
+    sts # square coords of the corners in face_handle's frame
+    face_handle::HalfEdgeHandle
+end
+
+struct Mouth # tessellated d=0 surface of a half-throat, for ambient rays to enter through
+    half_throat::HalfThroat
+    triangles::Vector{MouthTriangle}
+end
+
+function Mouth(env, half_throat::HalfThroat, samples_per_edge::Int)
+    pl = placement(half_throat)
+    m = mesh(half_throat)
+    n = samples_per_edge
+    triangles = MouthTriangle[]
+    for face in m.faces
+        h = HalfEdgeHandle(m, (face[1], face[2]))
+        chart = induced_chart(half_throat, vertex_index(h))
+        wedge = half_edge_offset(h)
+        grid = [pl.linear * surface(env, chart, square_coords_to_chart(valence(h), wedge, [i / n, j / n])) + pl.translation
+                for i = 0:n, j = 0:n]
+        at(ij) = grid[ij[1] + 1, ij[2] + 1]
+        st(ij) = [ij[1] / n, ij[2] / n]
+        for j = 0:(n - 1), i = 0:(n - 1)
+            a = (i, j); b = (i + 1, j); c = (i + 1, j + 1); d = (i, j + 1)
+            push!(triangles, MouthTriangle((at(a), at(b), at(c)), (st(a), st(b), st(c)), h))
+            push!(triangles, MouthTriangle((at(a), at(c), at(d)), (st(a), st(c), st(d)), h))
+        end
+    end
+    Mouth(half_throat, triangles)
+end
+
+function ray_triangle_intersection(origin, dir, a, b, c) # Moeller-Trumbore; loose edge tolerances, Newton cleans up
+    e1 = b - a
+    e2 = c - a
+    p = cross(dir, e2)
+    det = e1' * p
+    abs(det) < 1e-12 && return nothing
+    s = (origin - a) / det
+    u = s' * p
+    (u < -1e-6 || u > 1 + 1e-6) && return nothing
+    q = cross(s, e1)
+    v = dir' * q
+    (v < -1e-6 || u + v > 1 + 1e-6) && return nothing
+    t = e2' * q
+    t <= 1e-9 && return nothing
+    (t, u, v)
+end
+
+"""
+ambient ray -> the SituatedPhase entering this mouth at d = 0, or nothing on a
+miss; origin and dir live in the ambient space of the half_throat's placement
+"""
+function enter_mouth(env, mouth::Mouth, origin, dir)
+    best_t = Inf
+    best = nothing
+    for tri in mouth.triangles
+        hit = ray_triangle_intersection(origin, dir, tri.corners...)
+        (hit === nothing || hit[1] >= best_t) && continue
+        best_t = hit[1]
+        best = (hit, tri)
+    end
+    best === nothing && return nothing
+    (τ, bu, bv), tri = best
+    pl = placement(mouth.half_throat)
+    chart = induced_chart(mouth.half_throat, vertex_index(tri.face_handle))
+    n = valence(tri.face_handle)
+    wedge = half_edge_offset(tri.face_handle)
+    amb(st) = pl.linear * surface(env, chart, square_coords_to_chart(n, wedge, st)) + pl.translation
+    x = [(1 - bu - bv) * tri.sts[1] + bu * tri.sts[2] + bv * tri.sts[3] ; τ]
+    for _ in 1:10 # Newton against the exact surface, in (s, t, ray parameter)
+        residual = amb(x[1:2]) - origin - x[3] * dir
+        maximum(abs, residual) < 1e-12 && break
+        jac = [directional(amb, x[1:2], [1.0, 0.0]) directional(amb, x[1:2], [0.0, 1.0]) -dir]
+        x = x - jac \ residual
+    end
+    pos = [square_coords_to_chart(n, wedge, x[1:2]) ; 0.0]
+    cl = p -> pl.linear * collar(env, chart, p) + pl.translation
+    collar_jac = reduce(hcat, [directional(cl, pos, basis_direction(pos, j)) for j in 1:3])
+    settle_phase(env, SituatedPhase(chart, pos, collar_jac \ dir))
+end
+
 function reference_wedge_map(source_n, target_n, pos) # complex powers don't differentiate; test oracle only
     a0 = complex(pos[1], pos[2])
     a1 = a0^(source_n / 4)

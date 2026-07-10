@@ -134,6 +134,22 @@ straight to the metric layer (step 4). For rendering speed later: cache
 6. **Renderer**: camera in one flat patch, integrate geodesics until they exit to
    flat space on either side, hit-test against a simple environment (textured sky
    sphere per side).
+   - *Inverse mouth problem* done 2026-07-10: `Mouth(env, half_throat,
+     samples_per_edge)` tessellates the d=0 surface in ambient coords with chart
+     provenance per triangle (face handle + square-coord corners); `enter_mouth`
+     takes the nearest Möller–Trumbore hit as a guess, Newton-refines in
+     (s, t, ray-parameter) against the exact blended surface (~1e-13), and pulls
+     the ray direction back through the inverse collar Jacobian (exact — collar
+     is an isometry onto the flat outside), returning a settled SituatedPhase or
+     nothing on a miss. Verified: entry inverts `to_ambient` to machine
+     precision on pos and vel; flat speed² = chart-metric energy; full pipeline
+     ambient-in side 1 → ambient-out side 2 passes in the suite.
+   - Remaining: camera model, per-ambient-space mouth set (a ray must be tested
+     against every mouth placed in its ambient space), sky-sphere hit-test +
+     texture, image loop. Perf notes for then: `enter_mouth` is brute force over
+     triangles (fine at 768 tris; add a bbox/BVH if it hurts); cache
+     `yz_fitting_matrix` per valence; precompute limit positions; consider
+     ForwardDiff.jacobian chunking in christoffel.
 
 ## Testing infrastructure
 
