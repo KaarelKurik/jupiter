@@ -1,7 +1,40 @@
 # Claude's working plan
 
 Companion to kaarel's `plan`; tracks review findings and the proposed implementation
-sequence. Last updated 2026-07-08 after the Chart-as-handle redesign.
+sequence. Last updated 2026-07-10. **This file is the resume point** — read it plus
+`jj log` before touching code.
+
+## Where we are (2026-07-10)
+
+The POC pipeline is complete end-to-end: fitted YZ surface → blending → throat
+metric → christoffels → geodesics with chart/half/mouth transitions → BVH mouth
+entry → renderer with two-pass raymap output. First image lives in
+`gallery/first_light.png` (blue side-1 sky, orange side-2 sky visible through the
+throat with concentric lensing rings; 18 unresolved pixels sit on the critical
+ring, as limit-cycle theory predicts). 144 tests green via
+`julia --project -e 'using Pkg; Pkg.test()'`.
+
+Next candidates, kaarel picks the order:
+- **Silhouette tightening**: tessellation-only first-hit gives a polygonal
+  wormhole outline (spurious rim misses). `Mouth` is an abstract interface
+  ready for a second strategy (outward-offset tessellation, or a conservative
+  bound + Newton).
+- **Textured sky** from an image file (raymap makes iterating on this ~0.6s).
+- **David mesh path**: res/models/*.stl are triangles; fit_geometry assumes
+  quads, so one CC pre-subdivision or a quad remesh comes first; also STL
+  loading and probably per-valence caching of `yz_fitting_matrix`.
+- **Camera transport / fly-through**: camera = point + arbitrary frame (NOT
+  necessarily orthonormal — no global metric with non-isometric placements;
+  loop holonomy may rescale/shear, and should). Needs a parallel-transport
+  companion to geodesic_step; ray emission from inside via SituatedPhase.
+- **Perf**: render is threaded (63s for 192×144 on 16 threads, byte-identical
+  to serial); big wins left in christoffel (ForwardDiff.jacobian chunking) and
+  precomputing limit positions / fitting matrices.
+
+Working conventions: jj (never bare git mutations); one described change per
+step, `jj new` at seams, describe-as-intent up front; Claude does the jj
+bookkeeping at phase boundaries. `res/` tracked inputs, `out/` ignored outputs,
+`gallery/` curated milestone PNGs. Raymaps stay ignored (cache semantics).
 
 ## Current architecture (post-redesign)
 
@@ -44,11 +77,8 @@ the TaylorDiff figures: christoffel-vs-FD 4.7e-9, tensoriality 2.2e-15, round
 trips ~3e-16. Perf note for the renderer hot loop: `directional` is 3 calls per
 Jacobian; ForwardDiff.jacobian with chunking would do it in one pass.
 
-**Critical path**: blending done, so the metric → christoffel → geodesic stack is
-unblocked; next up is sampling/export (step 3) for visual + C3 verification, or
-straight to the metric layer (step 4). For rendering speed later: cache
-`yz_fitting_matrix` per valence and precompute limit positions over the mesh
-(existing comments in wew.jl note both).
+For rendering speed later: cache `yz_fitting_matrix` per valence and precompute
+limit positions over the mesh (existing comments in wew.jl note both).
 
 ## Implementation sequence
 
