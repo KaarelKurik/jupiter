@@ -16,5 +16,6 @@ t0 = time()
 raymap = J.render_raymap(nothing, scene, budget, cam, 1, w, h)
 println("traced in ", round(time() - t0, digits=1), "s;  unresolved pixels: ",
         count(==(0), raymap.side))
-J.save_raymap(joinpath(@__DIR__, "..", "res", "first_light.raymap"), raymap)
-J.save_ppm(joinpath(@__DIR__, "..", "res", "first_light.ppm"), J.shade(raymap, J.checker_sky))
+mkpath(joinpath(@__DIR__, "..", "out"))
+J.save_raymap(joinpath(@__DIR__, "..", "out", "first_light.raymap"), raymap)
+J.save_ppm(joinpath(@__DIR__, "..", "out", "first_light.ppm"), J.shade(raymap, J.checker_sky))
