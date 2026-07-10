@@ -160,12 +160,26 @@ straight to the metric layer (step 4). For rendering speed later: cache
      → re-enter loop; escaping AmbientRay or nothing when budget runs out),
      pinhole `look_at_camera`/`camera_ray`, `checker_sky` (30° checkers, blue
      side 1 / orange side 2), `render` image loop, `save_ppm`.
+   - *Raymap two-pass rendering* done 2026-07-10 (kaarel's request): `RayMap`
+     stores per-pixel exit (side, pos, vel; side 0 = unresolved) so skies swap
+     without retracing. `render_raymap` (expensive pass, Threads.@threads over
+     rows) → `shade(raymap, sky)` (cheap pass); `render` = the composition;
+     `save_raymap`/`load_raymap` via Serialization. Exit *positions* stored too,
+     so finite-distance environments stay possible later.
+   - *Camera stance settled with kaarel*: a camera is a point + an arbitrary
+     frame (basis), NOT necessarily orthonormal — with non-isometric placements
+     in one ambient space there is no global metric, only a connection, so loop
+     transport may rescale/shear a returning camera; images should honestly
+     show that. Orthonormality is just look_at_camera's initial condition; the
+     pinhole formula is indifferent (and homogeneous in overall frame scale).
+     Documented on the Camera struct; transport code itself is future work
+     (parallel-transport companion to geodesic_step for the fly-through shot).
    - Remaining/deferred: multi-mouth ambient spaces need nearest-entry selection
      across mouths (enter_mouth would need to expose hit distance); textured sky
      from an image; David mesh needs a quad remesh or one CC pre-subdivision
      (fit_geometry assumes quads). Perf notes: cache `yz_fitting_matrix` per
      valence; precompute limit positions; ForwardDiff.jacobian chunking in
-     christoffel; the render loop is embarrassingly parallel (Threads.@threads).
+     christoffel.
 
 ## Testing infrastructure
 

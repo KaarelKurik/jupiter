@@ -5,6 +5,7 @@ using GeometryBasics
 using LinearAlgebra
 using TensorOperations
 using ForwardDiff
+using Serialization
 using TypedPolynomials
 
 include("meshy.jl")

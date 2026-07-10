@@ -35,9 +35,18 @@ function trace_ray(env, scene, budget, ray::AmbientRay)
     nothing # out of passages; presumably orbiting near a limit cycle
 end
 
+"""
+pinhole camera: a point plus a frame (columns: right, up, forward). The frame
+is any basis, NOT necessarily orthonormal — orthonormality is merely
+look_at_camera's choice of initial condition. Transporting a camera through
+wormholes is connection transport, not metric transport (with non-isometric
+placements there is no global metric), so a camera returning from a loop may
+come back rescaled or sheared; its images will honestly show that. A uniform
+rescale of the frame is invisible: ray directions are homogeneous in it.
+"""
 struct Camera
     pos
-    frame # columns: right, up, forward
+    frame
     tan_half_fov
 end
 
@@ -63,23 +72,53 @@ end
 
 unresolved_color() = [0.0, 0.0, 0.0]
 
+struct RayMap # per-pixel trace outcome; trace once, shade under as many skies as you like
+    side::Matrix{Int} # exit side; 0 = unresolved within budget
+    pos::Array{Float64, 3} # 3 x width x height, ambient exit positions
+    vel::Array{Float64, 3} # 3 x width x height, ambient exit velocities
+end
+
 """
-render the scene from a camera sitting in cam_side's ambient space;
-returns a 3 x width x height array of rgb values in [0,1]
+the expensive pass: trace every camera ray through the scene and record where
+it ends up, without committing to any particular sky
 """
-function render(env, scene, budget, camera::Camera, cam_side::Int, width::Int, height::Int)
-    img = zeros(3, width, height)
+function render_raymap(env, scene, budget, camera::Camera, cam_side::Int, width::Int, height::Int)
+    raymap = RayMap(zeros(Int, width, height), zeros(3, width, height), zeros(3, width, height))
     cam_space = HalfThroat(scene.throat, cam_side)
     aspect = width / height
-    for j in 1:height, i in 1:width
-        x = (2 * (i - 0.5) / width - 1) * aspect
-        y = 1 - 2 * (j - 0.5) / height
-        out = trace_ray(env, scene, budget, camera_ray(camera, cam_space, x, y))
-        img[:, i, j] = out === nothing ? unresolved_color() :
-                       scene.sky(side(half_throat(out)), generic_normalize(out.vel))
+    Threads.@threads for j in 1:height
+        for i in 1:width
+            x = (2 * (i - 0.5) / width - 1) * aspect
+            y = 1 - 2 * (j - 0.5) / height
+            out = trace_ray(env, scene, budget, camera_ray(camera, cam_space, x, y))
+            out === nothing && continue
+            raymap.side[i, j] = side(half_throat(out))
+            raymap.pos[:, i, j] = out.pos
+            raymap.vel[:, i, j] = out.vel
+        end
+    end
+    raymap
+end
+
+"""
+the cheap pass: rgb image (3 x width x height, values in [0,1]) from a raymap
+"""
+function shade(raymap::RayMap, sky)
+    w, h = size(raymap.side)
+    img = zeros(3, w, h)
+    for j in 1:h, i in 1:w
+        img[:, i, j] = raymap.side[i, j] == 0 ? unresolved_color() :
+                       sky(raymap.side[i, j], generic_normalize(raymap.vel[:, i, j]))
     end
     img
 end
+
+function render(env, scene, budget, camera::Camera, cam_side::Int, width::Int, height::Int)
+    shade(render_raymap(env, scene, budget, camera, cam_side, width, height), scene.sky)
+end
+
+save_raymap(path, raymap::RayMap) = open(io -> serialize(io, raymap), path, "w")
+load_raymap(path) = open(deserialize, path)
 
 function save_ppm(path, img)
     _, w, h = size(img)

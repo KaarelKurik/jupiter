@@ -235,10 +235,24 @@ end
     back = J.trace_ray(nothing, scene, J.RayBudget(0.05, 300, 4), miss_ray)
     @test back === miss_ray
 
-    # tiny render: all pixels valid colors, both skies represented
-    img = J.render(nothing, scene, J.RayBudget(0.05, 300, 4), cam, 1, 8, 6)
+    # tiny render: raymap + shade agrees with direct render, all pixels valid
+    raymap = J.render_raymap(nothing, scene, J.RayBudget(0.05, 300, 4), cam, 1, 8, 6)
+    img = J.shade(raymap, J.checker_sky)
+    @test img == J.render(nothing, scene, J.RayBudget(0.05, 300, 4), cam, 1, 8, 6)
     @test all(isfinite, img)
     @test all(0 .<= img .<= 1)
+
+    # raymap survives a disk round trip, and re-shading is trace-free
+    path = tempname()
+    J.save_raymap(path, raymap)
+    raymap2 = J.load_raymap(path)
+    @test raymap2.side == raymap.side
+    @test raymap2.pos == raymap.pos
+    @test raymap2.vel == raymap.vel
+    flat_sky(side, dir) = side == 1 ? [1.0, 1.0, 1.0] : [0.5, 0.5, 0.5]
+    img2 = J.shade(raymap2, flat_sky)
+    @test size(img2) == size(img)
+    @test all(0 .<= img2 .<= 1)
 end
 
 @testset "metric tensoriality across transition" begin
