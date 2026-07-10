@@ -10,6 +10,7 @@ surf = J.Surface(m, J.fit_geometry(m))
 th = J.Throat(surf, J.ThroatParams(1.0, 1.0, 0.5, 0.75))
 ht = J.HalfThroat(th, 1)
 c = J.induced_chart(ht, 1)
+mouth = J.TessellatedMouth(nothing, ht, 8)
 
 @testset "jupiter" begin
 
@@ -163,8 +164,32 @@ end
     @test maximum(abs, vr.vel + va.vel) < 1e-9
 end
 
+@testset "bvh" begin
+    function brute_hit(origin, dir)
+        best_t = Inf
+        best = nothing
+        for tri in mouth.triangles
+            hit = J.ray_triangle_intersection(origin, dir, tri.corners...)
+            (hit === nothing || hit[1] >= best_t) && continue
+            best_t = hit[1]
+            best = (hit, tri)
+        end
+        best
+    end
+    for k in 1:40
+        θ = 2pi * k / 40
+        φ = pi * mod(k, 7) / 7 - pi / 2
+        origin = 3 * [cos(θ) * cos(φ), sin(θ) * cos(φ), sin(φ)]
+        target = 0.4 * [sin(3k), cos(2k), sin(5k)]
+        dir = J.generic_normalize(target - origin)
+        bf = brute_hit(origin, dir)
+        bvh = J.nearest_mouth_hit(mouth, origin, dir)
+        @test (bf === nothing) == (bvh === nothing)
+        bf === nothing || @test bf[1][1] == bvh[1][1]
+    end
+end
+
 @testset "mouth entry" begin
-    mouth = J.Mouth(nothing, ht, 8)
     uv0 = [0.1, 0.05]
     pos0 = [uv0; 0.0]
     vel0 = [0.02, 0.01, 0.6]
