@@ -144,12 +144,28 @@ straight to the metric layer (step 4). For rendering speed later: cache
      nothing on a miss. Verified: entry inverts `to_ambient` to machine
      precision on pos and vel; flat speed² = chart-metric energy; full pipeline
      ambient-in side 1 → ambient-out side 2 passes in the suite.
-   - Remaining: camera model, per-ambient-space mouth set (a ray must be tested
-     against every mouth placed in its ambient space), sky-sphere hit-test +
-     texture, image loop. Perf notes for then: `enter_mouth` is brute force over
-     triangles (fine at 768 tris; add a bbox/BVH if it hurts); cache
-     `yz_fitting_matrix` per valence; precompute limit positions; consider
-     ForwardDiff.jacobian chunking in christoffel.
+   - *Generic entry interface + BVH* done 2026-07-10 (kaarel's requirements:
+     David mesh is O(1e5) tris, and other entry strategies may be needed for
+     visual fidelity — tessellation-only first-hit gives spurious silhouette
+     misses, i.e. a polygonal wormhole outline). `Mouth` is now an abstract type
+     with contract enter_mouth(env, mouth, origin, dir) → SituatedPhase |
+     nothing, plus half_throat(mouth); `TessellatedMouth <: Mouth` carries a
+     median-split BVH (`build_bvh`/`nearest_mouth_hit`, verified identical to
+     brute force). A tighter entry strategy (e.g. outward-offset tessellation +
+     Newton, or sphere-tracing a conservative bound) can slot in later.
+   - *Renderer assembly* done 2026-07-10 in src/render.jl: `Scene` (throat, one
+     mouth per side — each side its own universe for now), `RayBudget`
+     (step_size, max_steps per passage, max_passages) as the user-facing knob
+     for limit-cycle rays (all wormholes admit them), `trace_ray` (enter → trace
+     → re-enter loop; escaping AmbientRay or nothing when budget runs out),
+     pinhole `look_at_camera`/`camera_ray`, `checker_sky` (30° checkers, blue
+     side 1 / orange side 2), `render` image loop, `save_ppm`.
+   - Remaining/deferred: multi-mouth ambient spaces need nearest-entry selection
+     across mouths (enter_mouth would need to expose hit distance); textured sky
+     from an image; David mesh needs a quad remesh or one CC pre-subdivision
+     (fit_geometry assumes quads). Perf notes: cache `yz_fitting_matrix` per
+     valence; precompute limit positions; ForwardDiff.jacobian chunking in
+     christoffel; the render loop is embarrassingly parallel (Threads.@threads).
 
 ## Testing infrastructure
 

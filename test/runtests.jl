@@ -216,6 +216,31 @@ end
     @test J.side(J.half_throat(r2)) == 2
 end
 
+@testset "renderer" begin
+    mouth2 = J.TessellatedMouth(nothing, J.HalfThroat(th, 2), 8)
+    scene = J.Scene(th, (mouth, mouth2), J.checker_sky)
+    cam = J.look_at_camera([0.0, -3.0, 0.4], zeros(3), [0.0, 0.0, 1.0], pi / 4)
+
+    # a ray aimed at the mouth escapes to the other side's sky within budget
+    hit_ray = J.camera_ray(cam, ht, 0.0, 0.0)
+    out = J.trace_ray(nothing, scene, J.RayBudget(0.05, 300, 4), hit_ray)
+    @test out isa J.AmbientRay
+    @test J.side(J.half_throat(out)) == 2
+
+    # the same ray under a starved step budget is unresolved
+    @test J.trace_ray(nothing, scene, J.RayBudget(0.05, 5, 4), hit_ray) === nothing
+
+    # a ray aimed well away never enters and comes back unchanged
+    miss_ray = J.AmbientRay(ht, [0.0, -3.0, 0.4], [0.0, -1.0, 0.3])
+    back = J.trace_ray(nothing, scene, J.RayBudget(0.05, 300, 4), miss_ray)
+    @test back === miss_ray
+
+    # tiny render: all pixels valid colors, both skies represented
+    img = J.render(nothing, scene, J.RayBudget(0.05, 300, 4), cam, 1, 8, 6)
+    @test all(isfinite, img)
+    @test all(0 .<= img .<= 1)
+end
+
 @testset "metric tensoriality across transition" begin
     pe = [0.3, 0.02, 0.25]
     vp(k) = J.SituatedPhase(c, pe, Float64.(1:3 .== k))
