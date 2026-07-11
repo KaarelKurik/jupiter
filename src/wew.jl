@@ -166,21 +166,29 @@ same face point as seen from the next corner ccw
 """
 next_corner_coords(st) = [st[2], 1 - st[1]]
 
+function corner_contribution(chart, corner, st)
+    w = blend_scalar(st[1]) * blend_scalar(st[2])
+    c = induced_chart(half_throat(chart), vertex_index(corner))
+    (w, polynomial_surface(c, square_coords_to_chart(valence(corner), half_edge_offset(corner), st)))
+end
+
 function surface(env, chart, uv)
     n = valence(chart)
     wix, _ = wedge_index_and_angle(n, primal.(uv))
     k = Int(mod(wix, n))
-    h = ccw(half_edge_handle(chart), k)
-    corners = [h ; accumulate((x,_)->next(x), 1:3, init=h)]
+    corner = ccw(half_edge_handle(chart), k)
     st = wedge_square_coords(n, k, uv)
-    sts = [[st] ; accumulate((x,_)->next_corner_coords(x), 1:3, init=st)]
-    weights = [blend_scalar(p[1]) * blend_scalar(p[2]) for p in sts]
-    vals = map(corners, sts) do corner, p
-        c = induced_chart(half_throat(chart), vertex_index(corner))
-        w = square_coords_to_chart(valence(corner), half_edge_offset(corner), p)
-        polynomial_surface(c, w)
+    weight, acc = corner_contribution(chart, corner, st)
+    acc = weight .* acc
+    total_weight = weight
+    for _ in 1:3
+        corner = next(corner)
+        st = next_corner_coords(st)
+        weight, val = corner_contribution(chart, corner, st)
+        @. acc += weight * val
+        total_weight += weight
     end
-    sum(weights .* vals) / sum(weights)
+    acc ./ total_weight
 end
 
 function surface_polynomials(chart::Chart)
