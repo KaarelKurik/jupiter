@@ -617,13 +617,13 @@ function yz_degree_bound(valence)
 end
 
 """
-we should precompute and cache these
-
 shape is monos by points
 """
+const yz_fitting_matrix_cache = Dict{Int, Matrix{Float64}}()
 function yz_fitting_matrix(valence)
-    td = yz_degree_bound(valence)
-    pinv(monomial_value_matrix(valence, td))
+    get!(yz_fitting_matrix_cache, valence) do
+        pinv(monomial_value_matrix(valence, yz_degree_bound(valence)))
+    end
 end
 
 """
@@ -655,15 +655,16 @@ function chart_fitting_indices(h::HalfEdgeHandle)
     [[vertex_index(h)] ; vec(chart_nonzero_fitting_indices(h))]
 end
 
-function chart_fit_polynomials(h::HalfEdgeHandle)
+function chart_fit_polynomials(h::HalfEdgeHandle, mesh_limit_positions)
     fm = yz_fitting_matrix(valence(h)) # monos by points
     indices = chart_fitting_indices(h)
-    # this'll work but the limit positions ought to be precomputed over the whole mesh, I figure
-    limit_positions = stack(map(ix -> limit_position(h.mesh, ix), indices))' # points by 3
+    limits = stack(mesh_limit_positions[indices])' # points by 3
     run = monomial_run(yz_degree_bound(valence(h))) # monos
-    coefs = fm * limit_positions # monos by 3
+    coefs = fm * limits # monos by 3
     vec(sum(run .* coefs, dims=1))
 end
+
+chart_fit_polynomials(h::HalfEdgeHandle) = chart_fit_polynomials(h, limit_positions(h.mesh))
 
 """
 returns chart polynomials in vertex order
@@ -676,6 +677,7 @@ function fit_geometry(m::Mesh) # this is classic YZ, so assumes quad mesh to sta
     grid_handle_names = [r2.quarter_edge_map[r1.quarter_edge_map[bh.name]] for bh in base_handles]
     grid_handles = [HalfEdgeHandle(r2.refined_mesh, shn) for shn in grid_handle_names]
 
-    chart_polys = [chart_fit_polynomials(h) for h in grid_handles]
+    limits = limit_positions(r2.refined_mesh)
+    chart_polys = [chart_fit_polynomials(h, limits) for h in grid_handles]
     chart_polys
 end
