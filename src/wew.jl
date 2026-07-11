@@ -249,8 +249,12 @@ end
 
 function christoffel(env, v::SituatedPhase)
     mf = Base.Fix1(Base.Fix1(metric, env), v.chart)
-    metric_derivs = stack([directional(mf, v.pos, basis_direction(v.pos, j)) for j in 1:3])
-    inv_m = inv(mf(v.pos))
+    # one dual pass with a 3-partial seed: metric value and all three derivatives together
+    tag = typeof(ForwardDiff.Tag(mf, eltype(v.pos)))
+    seeded = [ForwardDiff.Dual{tag}(v.pos[i], ntuple(j -> eltype(v.pos)(i == j), 3)) for i in 1:3]
+    md = mf(seeded)
+    metric_derivs = stack([ForwardDiff.partials.(md, j) for j in 1:3])
+    inv_m = inv(ForwardDiff.value.(md))
     @tensor begin
         cs[k,i,j] := 0.5 * inv_m[k,u] * (metric_derivs[u,i,j] + metric_derivs[j,u,i] - metric_derivs[i,j,u])
     end
