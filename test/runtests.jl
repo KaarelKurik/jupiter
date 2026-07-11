@@ -54,6 +54,15 @@ end
     @test sum(nrm .* J.generic_normalize(m.vertices[1])) > 0.5
 end
 
+@testset "packed polynomial evaluation" begin
+    # eval_packed against substitution into the actual polynomials
+    for vix in 1:length(m.vertices), uv in ([0.0, 0.0], [0.3, -0.2], [-0.45, 0.4])
+        cc = J.induced_chart(ht, vix)
+        @test maximum(abs, J.polynomial_surface(cc, uv) -
+                           J.reference_polynomial_surface(cc, uv)) < 1e-13
+    end
+end
+
 @testset "seam smoothness" begin
     # finite differences up to 4th order along an arc crossing a wedge seam,
     # compared against a no-seam baseline arc: no discontinuity signature

@@ -1,10 +1,10 @@
 # Claude's working plan
 
 Companion to kaarel's `plan`; tracks review findings and the proposed implementation
-sequence. Last updated 2026-07-10. **This file is the resume point** — read it plus
+sequence. Last updated 2026-07-11. **This file is the resume point** — read it plus
 `jj log` before touching code.
 
-## Where we are (2026-07-10)
+## Where we are (2026-07-11)
 
 The POC pipeline is complete end-to-end: fitted YZ surface → blending → throat
 metric → christoffels → geodesics with chart/half/mouth transitions → BVH mouth
@@ -13,6 +13,38 @@ entry → renderer with two-pass raymap output. First image lives in
 throat with concentric lensing rings; 18 unresolved pixels sit on the critical
 ring, as limit-cycle theory predicts). 144 tests green via
 `julia --project -e 'using Pkg; Pkg.test()'`.
+
+## Trefoil session (2026-07-11)
+
+- **Trefoil first light**: `res/models/trefoil.obj` (6144 quads, all valence 4,
+  same winding convention as cubemesh — checked via signed volume, both positive)
+  renders end-to-end via `scripts/trefoil.jl`. ThroatParams(1.0, 1.0, 0.2, 0.3) —
+  cylinder_depth well under the tube's ~0.5 cross-section curvature radius.
+  Mouth tessellation samples_per_edge=2 (49k tris/side). Interior shows heavily
+  scrambled side-2 sky, as a knotted throat should. `load_obj` added to meshy.jl
+  because MeshIO **triangulates** quad OBJs on load.
+- **Perf, 7.5x on the hot loop** (85 → 11.4 ms per knot-hitting ray; trefoil
+  192×144 render went 70.6s → ~10s on 16 threads). Steps, each verified against
+  an 80-ray seeded bundle (exit sides identical, pos/vel deviation ≤ 6e-11, from
+  arithmetic reordering only) plus the green suite:
+  1. packed chart polynomials: `pack_polys`/`eval_packed` dense Horner tables
+     replace TypedPolynomials substitution in `polynomial_surface`;
+     `reference_polynomial_surface` kept as the test oracle (1.65x)
+  2. `christoffel`: one 3-partial dual pass for metric value + all derivatives (1.5x)
+  3. `jacobian_columns(f, x, Val(N))` single dual-pass jacobians in
+     `outer_metric`, `inner_metric`, `surface_normal_out` (2.4x — this was the
+     multiplicative one, it cuts surface() evals per metric eval ~4x)
+  4. `surface`: explicit corner loop, no accumulate/map churn (~1.1x)
+  5. concrete field types: Mesh de-parametrized (T was never ≠ Float64),
+     ThroatParams/Placement/Surface.mesh concrete, SituatedPhase{P,V} (~1.1x)
+- Fit-side: `yz_fitting_matrix` cached per valence, limit positions precomputed
+  mesh-wide in `fit_geometry` (trefoil fit: ~1s). Both were existing TODOs.
+- **Perf still on the table**: ~8 MB allocated per ray remains (was 52) — small
+  Vector{Dual}s everywhere; the next big step is StaticArrays through the
+  geometric core, invasive but mechanical. Also `metric` evaluates the surface
+  jacobian twice (once inside collar's dual pass, once in inner_metric) —
+  sharing them entangles the clean outer/inner split, kaarel's call.
+  `surface_normal_out`'s nested pass inside collar is ~45% of trace time.
 
 Next candidates, kaarel picks the order:
 - **Silhouette tightening**: tessellation-only first-hit gives a polygonal
@@ -27,9 +59,9 @@ Next candidates, kaarel picks the order:
   necessarily orthonormal — no global metric with non-isometric placements;
   loop holonomy may rescale/shear, and should). Needs a parallel-transport
   companion to geodesic_step; ray emission from inside via SituatedPhase.
-- **Perf**: render is threaded (63s for 192×144 on 16 threads, byte-identical
-  to serial); big wins left in christoffel (ForwardDiff.jacobian chunking) and
-  precomputing limit positions / fitting matrices.
+- **Perf**: render is threaded (byte-identical to serial). The 2026-07-11 pass
+  took the hot loop 7.5x (see above); next win is StaticArrays through the
+  geometric core.
 
 Working conventions: jj (never bare git mutations); one described change per
 step, `jj new` at seams, describe-as-intent up front; Claude does the jj
@@ -74,11 +106,12 @@ swap the backend there if ForwardDiff ever disappoints. Nested duals (christoffe
 work out of the box via ForwardDiff's tag system; no patches needed. Full 14-check
 battery (scratchpad battery.jl — worth promoting to test/) passes identically to
 the TaylorDiff figures: christoffel-vs-FD 4.7e-9, tensoriality 2.2e-15, round
-trips ~3e-16. Perf note for the renderer hot loop: `directional` is 3 calls per
-Jacobian; ForwardDiff.jacobian with chunking would do it in one pass.
+trips ~3e-16. The AD contact surface is now `directional` plus
+`jacobian_columns` (2026-07-11): one seeded dual pass per jacobian instead of a
+call per column.
 
-For rendering speed later: cache `yz_fitting_matrix` per valence and precompute
-limit positions over the mesh (existing comments in wew.jl note both).
+(2026-07-11: `yz_fitting_matrix` per-valence cache and mesh-wide limit-position
+precompute are both done.)
 
 ## Implementation sequence
 
