@@ -4,7 +4,7 @@ const J = jupiter
 m = J.load_obj(joinpath(@__DIR__, "..", "res", "models", "trefoil.obj"))
 surf = J.Surface(m, J.fit_geometry(m))
 # tube radius ~0.5, so the collar must stay well inside the cross-section curvature
-th = J.Throat(surf, J.ThroatParams(1.0, 1.0, 0.2, 0.3))
+th = J.Throat(surf, J.ThroatParams(0.4, 1.0, 0.2, 0.3))
 mouths = (J.TessellatedMouth(nothing, J.HalfThroat(th, 1), 2),
           J.TessellatedMouth(nothing, J.HalfThroat(th, 2), 2))
 scene = J.Scene(th, mouths, J.checker_sky)
