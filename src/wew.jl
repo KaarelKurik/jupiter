@@ -6,6 +6,41 @@ greet() = print("Hello World!")
 struct Surface
     mesh
     chart_polys
+    packed_polys::Vector{Array{Float64, 3}} # fast evaluation form of chart_polys; [component, u-power+1, v-power+1]
+end
+
+Surface(mesh, chart_polys) = Surface(mesh, chart_polys, [pack_polys(ps) for ps in chart_polys])
+
+"""
+dense coefficient table of a chart's 3 polynomials, for allocation-free Horner
+evaluation; chart_polys stays the mathematical source of truth
+"""
+function pack_polys(polys)
+    td = maximum(maxdegree.(polys))
+    packed = zeros(3, td + 1, td + 1)
+    for (component, p) in enumerate(polys), t in terms(p)
+        eu, ev = exponents(monomial(t))
+        packed[component, eu + 1, ev + 1] = coefficient(t)
+    end
+    packed
+end
+
+function eval_packed(packed::Array{Float64, 3}, uv)
+    u, v = uv[1], uv[2]
+    acc = zero(u) * zero(v)
+    out = [acc, acc, acc]
+    for component in 1:3
+        acc_u = zero(acc)
+        for i in size(packed, 2):-1:1
+            acc_v = zero(acc)
+            for j in size(packed, 3):-1:1
+                acc_v = acc_v * v + packed[component, i, j]
+            end
+            acc_u = acc_u * u + acc_v
+        end
+        out[component] = acc_u
+    end
+    out
 end
 
 struct ThroatParams
@@ -69,6 +104,10 @@ function wedge_index_and_angle(n_wedges, pos)
 end
 
 function polynomial_surface(chart, uv)
+    eval_packed(packed_polys(geometry(half_throat(chart)))[vertex_index(chart)], uv)
+end
+
+function reference_polynomial_surface(chart, uv) # substitution into the actual polynomials; test oracle for eval_packed
     @polyvar u v
     [p(u => uv[1], v => uv[2]) for p in surface_polynomials(chart)]
 end
@@ -525,6 +564,10 @@ end
 
 function chart_polys(surface::Surface)
     surface.chart_polys
+end
+
+function packed_polys(surface::Surface)
+    surface.packed_polys
 end
 
 function mesh(surface::Surface)
