@@ -120,6 +120,18 @@ basis_direction(x, j) = [Float64(i == j) for i in eachindex(x)]
 # the one point of contact with the AD library; see taylordiff-bugs.md for why we left TaylorDiff
 directional(f, x, v) = ForwardDiff.derivative(t -> f(x .+ t .* v), 0.0)
 
+"""
+all coordinate directional derivatives of f at x in one dual pass; returns
+columns [df/dx_1 ... df/dx_n] like the hcat-of-directionals it replaces.
+N must equal length(x) (passed as Val so the seed tuples are stack-allocated).
+"""
+function jacobian_columns(f, x, ::Val{N}) where {N}
+    tag = typeof(ForwardDiff.Tag(f, eltype(x)))
+    seeded = [ForwardDiff.Dual{tag}(x[i], ntuple(j -> eltype(x)(i == j), Val(N))) for i in 1:N]
+    fd = f(seeded)
+    stack([ForwardDiff.partials.(fd, j) for j in 1:N])
+end
+
 flat_bump(x) = primal(x) > 0 ? exp(-1 / x) : zero(x)
 
 """
@@ -203,9 +215,8 @@ end
 
 function surface_normal_out(env, chart, uv)
     s = Base.Fix1(Base.Fix1(surface, env), chart)
-    du = directional(s, uv, basis_direction(uv, 1))
-    dv = directional(s, uv, basis_direction(uv, 2))
-    generic_normalize(cross(du, dv))
+    jac = jacobian_columns(s, uv, Val(2))
+    generic_normalize(cross(jac[:, 1], jac[:, 2]))
 end
 
 generic_normalize(x) = x ./ sqrt(sum(abs2, x)) # LinearAlgebra.normalize has scaling branches unfriendly to dual numbers
@@ -217,7 +228,7 @@ end
 
 function outer_metric(env, chart, pos)
     cl = Base.Fix1(Base.Fix1(collar, env), chart)
-    collar_jac = reduce(hcat, [directional(cl, pos, basis_direction(pos, j)) for j in 1:3])
+    collar_jac = jacobian_columns(cl, pos, Val(3))
     collar_jac' * collar_jac
 end
 
@@ -228,7 +239,7 @@ end
 function inner_metric(env, chart, pos)
     sf = Base.Fix1(Base.Fix1(surface, env), chart)
     params = inner_metric_params(env, chart)
-    sf_jac = reduce(hcat, [directional(sf, pos[1:2], basis_direction(pos[1:2], j)) for j in 1:2])
+    sf_jac = jacobian_columns(sf, pos[1:2], Val(2))
     g = params.cross_scale * sf_jac' * sf_jac
     out = zeros(promote_type(eltype(g), typeof(params.depth_scale)), 3, 3)
     out[1:2, 1:2] = g
