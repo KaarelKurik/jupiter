@@ -42,7 +42,9 @@ look_at_camera's choice of initial condition. Transporting a camera through
 wormholes is connection transport, not metric transport (with non-isometric
 placements there is no global metric), so a camera returning from a loop may
 come back rescaled or sheared; its images will honestly show that. A uniform
-rescale of the frame is invisible: ray directions are homogeneous in it.
+rescale of the frame is invisible in a single image: ray directions are homogeneous in it.
+However, the scale of the frame may be observed in a camera transport process,
+if the velocity is proportional to the frame.
 """
 struct Camera
     pos
