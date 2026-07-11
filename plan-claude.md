@@ -39,6 +39,11 @@ ring, as limit-cycle theory predicts). 144 tests green via
      ThroatParams/Placement/Surface.mesh concrete, SituatedPhase{P,V} (~1.1x)
 - Fit-side: `yz_fitting_matrix` cached per valence, limit positions precomputed
   mesh-wide in `fit_geometry` (trefoil fit: ~1s). Both were existing TODOs.
+- **`scripts/physics_diff.jl`**: deterministic 80-ray bundles (golden-angle
+  spiral, no RNG) through cube + trefoil scenes vs committed plain-text
+  baselines in `res/physics_diff/`. Run it around any optimization; side flips
+  are the hard signal, pos/vel tolerance 1e-9 covers reordering amplification.
+  `--save` regenerates baselines after a *deliberate* physics change.
 - **Perf still on the table**: ~8 MB allocated per ray remains (was 52) — small
   Vector{Dual}s everywhere; the next big step is StaticArrays through the
   geometric core, invasive but mechanical. Also `metric` evaluates the surface
