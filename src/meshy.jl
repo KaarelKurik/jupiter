@@ -137,6 +137,21 @@ end
 
 save_obj(path, m::Mesh) = save_obj(path, m.vertices, m.faces)
 
+function load_obj(path) # MeshIO triangulates on load; YZ fitting needs the quads kept intact
+    vertices = Vector{Float64}[]
+    faces = Vector{Int}[]
+    for line in eachline(path)
+        parts = split(line)
+        isempty(parts) && continue
+        if parts[1] == "v"
+            push!(vertices, parse.(Float64, parts[2:4]))
+        elseif parts[1] == "f"
+            push!(faces, [parse(Int, first(split(p, '/'))) for p in parts[2:end]])
+        end
+    end
+    Mesh(vertices, faces)
+end
+
 function edges(m::Mesh)
     out = Set()
     for face in m.faces
