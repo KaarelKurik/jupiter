@@ -119,6 +119,34 @@ function render(env, scene, budget, camera::Camera, cam_side::Int, width::Int, h
     shade(render_raymap(env, scene, budget, camera, cam_side, width, height), scene.sky)
 end
 
+"""
+straight-ray reference pass: headlight-shade the camera-side mouth
+tessellation (grayscale, silhouette-darkening |n·view|), sky everywhere else —
+the undeflected outline to hold lensed renders against
+"""
+function render_flat(env, scene, camera::Camera, cam_side::Int, width::Int, height::Int)
+    img = zeros(3, width, height)
+    cam_space = HalfThroat(scene.throat, cam_side)
+    mouth = scene.mouths[cam_side]
+    aspect = width / height
+    Threads.@threads for j in 1:height
+        for i in 1:width
+            x = (2 * (i - 0.5) / width - 1) * aspect
+            y = 1 - 2 * (j - 0.5) / height
+            ray = camera_ray(camera, cam_space, x, y)
+            hit = nearest_mouth_hit(mouth, ray.pos, ray.vel)
+            if hit === nothing
+                img[:, i, j] = scene.sky(cam_side, ray.vel)
+            else
+                _, tri = hit
+                n = generic_normalize(cross(tri.corners[2] - tri.corners[1], tri.corners[3] - tri.corners[1]))
+                img[:, i, j] .= 0.2 + 0.8 * abs(n' * ray.vel)
+            end
+        end
+    end
+    img
+end
+
 save_raymap(path, raymap::RayMap) = open(io -> serialize(io, raymap), path, "w")
 load_raymap(path) = open(deserialize, path)
 

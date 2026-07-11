@@ -20,3 +20,4 @@ println("traced in ", round(time() - t0, digits=1), "s;  unresolved pixels: ",
 mkpath(joinpath(@__DIR__, "..", "out"))
 J.save_raymap(joinpath(@__DIR__, "..", "out", "trefoil.raymap"), raymap)
 J.save_ppm(joinpath(@__DIR__, "..", "out", "trefoil.ppm"), J.shade(raymap, J.checker_sky))
+J.save_ppm(joinpath(@__DIR__, "..", "out", "trefoil_flat.ppm"), J.render_flat(nothing, scene, cam, 1, w, h))
