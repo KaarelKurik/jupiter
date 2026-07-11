@@ -5,8 +5,8 @@ struct HalfEdge
     face_index::Int
 end
 
-struct Mesh{T} # both vertices and faces consecutively 1-indexed
-    vertices::Vector{Vector{T}}
+struct Mesh # both vertices and faces consecutively 1-indexed; concrete fields keep the mesh-walking hot loop type-stable
+    vertices::Vector{Vector{Float64}}
     faces::Vector{Vector{Int}} # ccw
     vertex_neighbors::Vector{Vector{Int}}
     half_edges::Dict{NTuple{2,Int}, HalfEdge}
@@ -112,7 +112,7 @@ function valence(h::HalfEdgeHandle)
     valence(h.mesh, vertex_index(h))
 end
 
-Mesh(vertices::Vector{Vector{T}}, faces::Vector{Vector{Int}}) where {T} = begin
+Mesh(vertices::Vector{Vector{Float64}}, faces::Vector{Vector{Int}}) = begin
     vn = vertex_neighbors(faces, length(vertices))
     he = half_edges(faces)
     Mesh(vertices, faces, vn, he, half_edge_offsets(vn, he))

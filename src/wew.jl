@@ -4,7 +4,7 @@ greet() = print("Hello World!")
 # Let's just make half-edges a thick concept, fuck it
 
 struct Surface
-    mesh
+    mesh::Mesh
     chart_polys
     packed_polys::Vector{Array{Float64, 3}} # fast evaluation form of chart_polys; [component, u-power+1, v-power+1]
 end
@@ -44,10 +44,10 @@ function eval_packed(packed::Array{Float64, 3}, uv)
 end
 
 struct ThroatParams
-    cross_scale
-    depth_scale
-    cylinder_depth # depth by which the metric is fully cylindrical
-    transition_depth # depth of the handover to the other half
+    cross_scale::Float64
+    depth_scale::Float64
+    cylinder_depth::Float64 # depth by which the metric is fully cylindrical
+    transition_depth::Float64 # depth of the handover to the other half
     function ThroatParams(cross_scale, depth_scale, cylinder_depth, transition_depth)
         @assert transition_depth >= cylinder_depth
         new(cross_scale, depth_scale, cylinder_depth, transition_depth)
@@ -55,8 +55,8 @@ struct ThroatParams
 end
 
 struct Placement # local-to-global; orientation bookkeeping lives here, not in the half-to-half gluing
-    linear
-    translation
+    linear::Matrix{Float64}
+    translation::Vector{Float64}
 end
 
 identity_placement() = Placement([1. 0 0; 0 1 0; 0 0 1], zeros(3))
@@ -79,10 +79,10 @@ struct Chart
     half_edge_handle::HalfEdgeHandle
 end
 
-struct SituatedPhase
+struct SituatedPhase{P, V} # pos/vel parametric so the integrator's phases are fully typed
     chart::Chart
-    pos
-    vel
+    pos::P
+    vel::V
 end
 
 struct SituatedPos
