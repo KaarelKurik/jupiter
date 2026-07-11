@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# warm julia daemon wrapper: runs .jl scripts in a persistent process so the
+# ~20s package-load/JIT cost is paid once, not per call.
+#
+#   scripts/jd script.jl [args...]   run script in the warm daemon (starts it if needed)
+#   scripts/jd --restart             kill and cold-start the daemon
+#   scripts/jd --stop                kill the daemon
+#   scripts/jd --status              is it running, and with what
+#
+# Staleness policy (warm semantics must never silently diverge from cold):
+#   - Revise applies function edits live; edits it CANNOT apply (struct/const
+#     redefinitions) make the daemon exit loudly, and the next call cold-starts.
+#   - Project.toml/Manifest.toml changes trigger an automatic restart.
+#   - jupiter's memoization caches are emptied before every run.
+#   - Anything that certifies a change (tests, physics_diff, final renders)
+#     should run cold, never through the daemon.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORT="${JD_PORT:-3742}"
+RUN_DIR="$ROOT/out"
+PID_FILE="$RUN_DIR/jd.pid"
+LOG_FILE="$RUN_DIR/jd.log"
+STAMP_FILE="$RUN_DIR/jd.stamp"
+
+env_stamp() { cat "$ROOT/Project.toml" "$ROOT/Manifest.toml" 2>/dev/null | md5sum | cut -d' ' -f1; }
+
+alive() { [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; }
+
+probe() { # daemon accepting work? (DaemonMode clients exit 0 on connection failure, so match output)
+    local out
+    out="$(julia --project="$ROOT" --startup-file=no -e "using DaemonMode; runexpr(\"println(:jd_ok)\", port=$PORT)" 2>&1)"
+    [[ "$out" == *jd_ok* ]]
+}
+
+stop_daemon() {
+    if alive; then
+        kill "$(cat "$PID_FILE")" 2>/dev/null
+        for _ in $(seq 1 50); do alive || break; sleep 0.1; done
+        alive && kill -9 "$(cat "$PID_FILE")" 2>/dev/null
+        echo "jd: daemon stopped" >&2
+    fi
+    rm -f "$PID_FILE" "$STAMP_FILE"
+}
+
+start_daemon() {
+    mkdir -p "$RUN_DIR"
+    echo "jd: cold-starting daemon (loading jupiter, ~30s)..." >&2
+    ( # exec so $! is julia itself, with all stdio detached from the caller
+        cd "$ROOT"
+        exec nohup julia --project="$ROOT" --threads=auto --startup-file=no -e "
+            using Revise, DaemonMode, jupiter
+            serve($PORT)
+        " <"/dev/null" >"$LOG_FILE" 2>&1
+    ) &
+    echo $! > "$PID_FILE"
+    env_stamp > "$STAMP_FILE"
+    for _ in $(seq 1 120); do
+        alive || { echo "jd: daemon died during startup; see $LOG_FILE" >&2; rm -f "$PID_FILE" "$STAMP_FILE"; exit 1; }
+        probe && { echo "jd: daemon ready" >&2; return 0; }
+        sleep 1
+    done
+    echo "jd: daemon failed to become ready; see $LOG_FILE" >&2
+    exit 1
+}
+
+ensure_daemon() {
+    if alive && [[ "$(env_stamp)" != "$(cat "$STAMP_FILE" 2>/dev/null)" ]]; then
+        echo "jd: Project.toml/Manifest.toml changed; restarting daemon" >&2
+        stop_daemon
+    fi
+    alive || start_daemon
+}
+
+case "${1:-}" in
+    --stop) stop_daemon; exit 0 ;;
+    --restart) stop_daemon; start_daemon; exit 0 ;;
+    --status)
+        if alive; then
+            echo "jd: running (pid $(cat "$PID_FILE"), port $PORT, log $LOG_FILE)"
+        else
+            echo "jd: not running"
+        fi
+        exit 0 ;;
+    ""|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+SCRIPT="$(realpath "$1")"
+shift
+[[ -f "$SCRIPT" ]] || { echo "jd: no such script: $SCRIPT" >&2; exit 1; }
+
+ensure_daemon
+
+# per-run shim: revise, refuse to run on unapplied edits, clear caches, include
+SHIM="$(mktemp --suffix=.jl)"
+trap 'rm -f "$SHIM"' EXIT
+cat > "$SHIM" <<EOF
+import Revise
+Revise.revise()
+if isdefined(Revise, :queue_errors) && !isempty(Revise.queue_errors)
+    for k in keys(Revise.queue_errors)
+        println(stderr, "jd: unapplied edit in " * string(k))
+    end
+    println(stderr, "jd: Revise could not apply source edits (struct/const redefinition?).")
+    println(stderr, "jd: daemon exiting so warm state cannot go stale; rerun for a cold start.")
+    # exit() here is DaemonMode's module-local shadow (clean error to the client);
+    # Base.exit on a delay genuinely kills the daemon once the reply has flushed
+    @async (sleep(1.0); Base.exit(1))
+    exit(1)
+end
+import jupiter
+empty!(jupiter.yz_fitting_matrix_cache)
+include(raw"$SCRIPT")
+EOF
+
+julia --project="$ROOT" --startup-file=no -e "using DaemonMode; runargs($PORT)" "$SHIM" "$@"
+RC=$?
+if [[ $RC -ne 0 ]] && ! alive; then
+    echo "jd: daemon is gone (struct edit or crash); next call cold-starts it" >&2
+    rm -f "$PID_FILE" "$STAMP_FILE"
+fi
+exit $RC

@@ -44,6 +44,18 @@ ring, as limit-cycle theory predicts). 144 tests green via
   baselines in `res/physics_diff/`. Run it around any optimization; side flips
   are the hard signal, pos/vel tolerance 1e-9 covers reordering amplification.
   `--save` regenerates baselines after a *deliberate* physics change.
+- **Warm daemon tooling (2026-07-11, verified except two tests)**: `scripts/jd`
+  runs .jl scripts in a warm DaemonMode process (0.3s vs ~20s cold; deps Revise +
+  DaemonMode added). Staleness policy: certification (tests/physics_diff/final
+  renders) always runs cold; per-run Revise + queue_errors die-loudly shim;
+  caches cleared per run; Project/Manifest hash change auto-restarts (verified);
+  `--restart/--stop/--status` escape hatches. Notable finding: Julia 1.12 +
+  Revise hot-applies **struct redefinitions** correctly (verified on
+  SituatedPos), so the classic staleness vector is largely gone; broken-syntax
+  edits fail every run loudly until fixed, then recover (verified). The
+  `.claude/skills/julia-workflow` skill documents the workflow. **Left to test
+  next session**: explicit `--restart`/`--stop` exercises, and a warm run of the
+  ray-bundle compare against the cold baseline (warm≡cold semantics spot check).
 - **Perf still on the table**: ~8 MB allocated per ray remains (was 52) — small
   Vector{Dual}s everywhere; the next big step is StaticArrays through the
   geometric core, invasive but mechanical. Also `metric` evaluates the surface

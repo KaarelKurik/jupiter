@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["kaarel <kaarelaugustkurik@gmail.com>"]
 
 [deps]
+DaemonMode = "d749ddd5-2b29-4920-8305-6ff5a704e36e"
 FileIO = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
@@ -15,6 +16,7 @@ TensorOperations = "6aa20fa7-93e2-5fca-9bc0-fbd0db3c71a2"
 TypedPolynomials = "afbbf031-7a57-5f58-a1b9-b774a0fad08d"
 
 [compat]
+DaemonMode = "0.1.10"
 FileIO = "1.19.0"
 ForwardDiff = "1.4.1"
 GeometryBasics = "0.5.11"
