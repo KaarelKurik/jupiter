@@ -47,6 +47,8 @@ description: How to run, test, render, and benchmark Julia code in this repo —
 
 ## Repo conventions (pointers)
 
-- `plan-claude.md` in the repo root is the session resume point; read it first.
+- `plan/claude.md` is the session resume point; read it first. Dated session
+  logs live alongside it (`plan/YYYY-MM-DD.md`); kaarel's own journal is
+  `plan/kaarel.md`.
 - VCS is jj, never bare git mutations; one described change per step.
 - `res/` tracked inputs, `out/` ignored outputs, `gallery/` curated renders.
