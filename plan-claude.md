@@ -77,14 +77,22 @@ Next candidates, kaarel picks the order:
   loop holonomy may rescale/shear, and should). Needs a parallel-transport
   companion to geodesic_step; ray emission from inside via SituatedPhase.
 - **Perf**: render is threaded (byte-identical to serial). The 2026-07-11 pass
-  took the hot loop 7.5x (see above); next win is StaticArrays through the
-  geometric core. Ground truth for aggressive optimization (kaarel's
-  requirement, 2026-07-11): `src/reference.jl` (`Reference` submodule) mirrors
-  the semantic core in its simplest form — same names, plain arrays, naive
-  derivatives — and the "reference equivalence" testset holds production to it
-  pointwise and along side-by-side traces. Deliberate semantic changes go to
-  reference.jl first, then production follows; optimized code stays readable
-  as an elaboration of it.
+  took the hot loop 7.5x (see above). Ground truth for aggressive optimization
+  (kaarel's requirement, 2026-07-11): `src/reference.jl` (`Reference`
+  submodule) mirrors the semantic core in its simplest form — same names,
+  plain arrays, naive derivatives — and the "reference equivalence" testset
+  holds production to it pointwise and along side-by-side traces. Deliberate
+  semantic changes go to reference.jl first, then production follows;
+  optimized code stays readable as an elaboration of it.
+- **StaticArrays pass done (2026-07-11, evening)**: SVector/SMatrix through
+  eval_packed, jacobian_columns, metrics, christoffel (@tensor replaced by
+  stack-allocated ntuple assembly; TensorOperations dep dropped), wedge/chart
+  coords, transitions, enter_mouth entry phase. Trefoil ray 17.2 → 5.5 ms
+  (3.1x), allocations 8.9/9.4 → 1.0/1.3 MB/ray, 384×288 trefoil render
+  26.3 → 14.8 s. physics_diff clean (0 flips, ≤1.4e-10). Remaining alloc
+  suspects for a later pass: Placement (Matrix/Vector) in to_ambient and
+  mouth tessellation, BVH traversal stack, enter_mouth Newton on plain
+  arrays.
 
 Working conventions: jj (never bare git mutations); one described change per
 step, `jj new` at seams, describe-as-intent up front; Claude does the jj

@@ -27,20 +27,17 @@ end
 
 function eval_packed(packed::Array{Float64, 3}, uv)
     u, v = uv[1], uv[2]
-    acc = zero(u) * zero(v)
-    out = [acc, acc, acc]
-    for component in 1:3
-        acc_u = zero(acc)
+    SVector(ntuple(Val(3)) do component
+        acc_u = zero(u) * zero(v)
         for i in size(packed, 2):-1:1
-            acc_v = zero(acc)
+            acc_v = zero(acc_u)
             for j in size(packed, 3):-1:1
                 acc_v = acc_v * v + packed[component, i, j]
             end
             acc_u = acc_u * u + acc_v
         end
-        out[component] = acc_u
-    end
-    out
+        acc_u
+    end)
 end
 
 struct ThroatParams
@@ -116,15 +113,15 @@ basis_direction(x, j) = [Float64(i == j) for i in eachindex(x)]
 directional(f, x, v) = ForwardDiff.derivative(t -> f(x .+ t .* v), 0.0)
 
 """
-all coordinate directional derivatives of f at x in one dual pass; returns
-columns [df/dx_1 ... df/dx_n] like the hcat-of-directionals it replaces.
-N must equal length(x) (passed as Val so the seed tuples are stack-allocated).
+all coordinate directional derivatives of f at x in one dual pass; returns an
+SMatrix of columns [df/dx_1 ... df/dx_n] like the hcat-of-directionals it
+replaces. N must equal length(x) (passed as Val so everything stack-allocates).
 """
 function jacobian_columns(f, x, ::Val{N}) where {N}
     tag = typeof(ForwardDiff.Tag(f, eltype(x)))
-    seeded = [ForwardDiff.Dual{tag}(x[i], ntuple(j -> eltype(x)(i == j), Val(N))) for i in 1:N]
+    seeded = SVector{N}(ntuple(i -> ForwardDiff.Dual{tag}(x[i], ntuple(j -> eltype(x)(i == j), Val(N))), Val(N)))
     fd = f(seeded)
-    stack([ForwardDiff.partials.(fd, j) for j in 1:N])
+    hcat(ntuple(j -> ForwardDiff.partials.(fd, j), Val(N))...)
 end
 
 flat_bump(x) = primal(x) > 0 ? exp(-1 / x) : zero(x)
@@ -146,20 +143,20 @@ with u along the wedge's starting edge
 """
 function wedge_square_coords(n_wedges, wedge_index, pos)
     s, c = sincos(-2pi * wedge_index / n_wedges)
-    rpos = [c * pos[1] - s * pos[2], s * pos[1] + c * pos[2]]
+    rpos = SVector(c * pos[1] - s * pos[2], s * pos[1] + c * pos[2])
     sqrt(2) * fake_complex_pow(rpos, n_wedges / 4)
 end
 
 function square_coords_to_chart(n_wedges, wedge_index, st)
     z = fake_complex_pow(st / sqrt(2), 4 / n_wedges)
     s, c = sincos(2pi * wedge_index / n_wedges)
-    [c * z[1] - s * z[2], s * z[1] + c * z[2]]
+    SVector(c * z[1] - s * z[2], s * z[1] + c * z[2])
 end
 
 """
 same face point as seen from the next corner ccw
 """
-next_corner_coords(st) = [st[2], 1 - st[1]]
+next_corner_coords(st) = SVector(st[2], 1 - st[1])
 
 function corner_contribution(chart, corner, st)
     w = blend_scalar(st[1]) * blend_scalar(st[2])
@@ -174,16 +171,16 @@ function surface(env, chart, uv)
     corner = ccw(half_edge_handle(chart), k)
     st = wedge_square_coords(n, k, uv)
     weight, acc = corner_contribution(chart, corner, st)
-    acc = weight .* acc
+    acc = weight * acc
     total_weight = weight
     for _ in 1:3
         corner = next(corner)
         st = next_corner_coords(st)
         weight, val = corner_contribution(chart, corner, st)
-        @. acc += weight * val
+        acc = acc + weight * val
         total_weight += weight
     end
-    acc ./ total_weight
+    acc / total_weight
 end
 
 function surface_polynomials(chart::Chart)
@@ -225,7 +222,7 @@ end
 generic_normalize(x) = x ./ sqrt(sum(abs2, x)) # LinearAlgebra.normalize has scaling branches unfriendly to dual numbers
 
 function collar(env, chart, pos)
-    uv = pos[1:2]
+    uv = SVector(pos[1], pos[2])
     surface(env, chart, uv) - pos[3] * surface_normal_out(env, chart, uv)
 end
 
@@ -242,12 +239,10 @@ end
 function inner_metric(env, chart, pos)
     sf = Base.Fix1(Base.Fix1(surface, env), chart)
     params = inner_metric_params(env, chart)
-    sf_jac = jacobian_columns(sf, pos[1:2], Val(2))
+    sf_jac = jacobian_columns(sf, SVector(pos[1], pos[2]), Val(2))
     g = params.cross_scale * sf_jac' * sf_jac
-    out = zeros(promote_type(eltype(g), typeof(params.depth_scale)), 3, 3)
-    out[1:2, 1:2] = g
-    out[3,3] = params.depth_scale
-    out
+    z = zero(eltype(g))
+    SMatrix{3, 3}(g[1, 1], g[2, 1], z, g[1, 2], g[2, 2], z, z, z, eltype(g)(params.depth_scale))
 end
 
 function depth_interpolate(t, om, im) # t = depth / cylinder_depth
@@ -265,22 +260,21 @@ function christoffel(env, v::SituatedPhase)
     mf = Base.Fix1(Base.Fix1(metric, env), v.chart)
     # one dual pass with a 3-partial seed: metric value and all three derivatives together
     tag = typeof(ForwardDiff.Tag(mf, eltype(v.pos)))
-    seeded = [ForwardDiff.Dual{tag}(v.pos[i], ntuple(j -> eltype(v.pos)(i == j), 3)) for i in 1:3]
+    seeded = SVector{3}(ntuple(i -> ForwardDiff.Dual{tag}(v.pos[i], ntuple(j -> eltype(v.pos)(i == j), Val(3))), Val(3)))
     md = mf(seeded)
-    metric_derivs = stack([ForwardDiff.partials.(md, j) for j in 1:3])
+    dg = ntuple(j -> ForwardDiff.partials.(md, j), Val(3)) # dg[c][a,b] = ∂g_ab/∂x_c
     inv_m = inv(ForwardDiff.value.(md))
-    @tensor begin
-        cs[k,i,j] := 0.5 * inv_m[k,u] * (metric_derivs[u,i,j] + metric_derivs[j,u,i] - metric_derivs[i,j,u])
-    end
-    cs
+    SArray{Tuple{3, 3, 3}}(ntuple(Val(27)) do n
+        k = (n - 1) % 3 + 1
+        i = ((n - 1) ÷ 3) % 3 + 1
+        j = (n - 1) ÷ 9 + 1
+        0.5 * sum(inv_m[k, u] * (dg[j][u, i] + dg[i][j, u] - dg[u][i, j]) for u in 1:3)
+    end)
 end
 
 function wvel_along_v(env, v::SituatedPhase, w::SituatedPhase)
     c = christoffel(env, v)
-    @tensor begin
-        wvel[k] := -v.vel[i] * w.vel[j] * c[k,i,j]
-    end
-    wvel
+    SVector{3}(ntuple(k -> -sum(v.vel[i] * w.vel[j] * c[k, i, j] for i in 1:3, j in 1:3), Val(3)))
 end
 
 function to_ambient(env, v::SituatedPhase)
@@ -292,7 +286,7 @@ end
 function half_transition(v::SituatedPhase) # the gluing is natural: identity in (u,v), reversal in d
     td = params(half_throat(v.chart)).transition_depth
     c2 = Chart(other_half(half_throat(v.chart)), half_edge_handle(v.chart))
-    SituatedPhase(c2, [v.pos[1], v.pos[2], 2 * td - v.pos[3]], [v.vel[1], v.vel[2], -v.vel[3]])
+    SituatedPhase(c2, SVector(v.pos[1], v.pos[2], 2 * td - v.pos[3]), SVector(v.vel[1], v.vel[2], -v.vel[3]))
 end
 
 exits_mouth(v::SituatedPhase) = v.pos[3] < 0 && v.vel[3] <= 0 # once here, the flat outer region owns the ray
@@ -503,10 +497,11 @@ function enter_mouth(env, mouth::TessellatedMouth, origin, dir)
         jac = [directional(amb, x[1:2], [1.0, 0.0]) directional(amb, x[1:2], [0.0, 1.0]) -dir]
         x = x - jac \ residual
     end
-    pos = [square_coords_to_chart(n, wedge, x[1:2]) ; 0.0]
+    w = square_coords_to_chart(n, wedge, x[1:2])
+    pos = SVector(w[1], w[2], 0.0)
     cl = p -> pl.linear * collar(env, chart, p) + pl.translation
     collar_jac = reduce(hcat, [directional(cl, pos, basis_direction(pos, j)) for j in 1:3])
-    settle_phase(env, SituatedPhase(chart, pos, collar_jac \ dir))
+    settle_phase(env, SituatedPhase(chart, pos, SVector{3}(collar_jac \ dir)))
 end
 
 function reference_wedge_map(source_n, target_n, pos) # complex powers don't differentiate; test oracle only
@@ -521,17 +516,17 @@ end
 safe_atan2(y, x) = primal(x) >= 0 ? 2 * atan(y / (sqrt(x^2 + y^2) + x)) : 2 * atan((sqrt(x^2 + y^2) - x) / y)
 
 function fake_complex_pow(z, power)
-    iszero(primal(z[1])) && iszero(primal(z[2])) && return [zero(z[1]), zero(z[2])] # safe_atan2 is 0/0 at the origin
+    iszero(primal(z[1])) && iszero(primal(z[2])) && return SVector(zero(z[1]), zero(z[2])) # safe_atan2 is 0/0 at the origin
     α = safe_atan2(z[2], z[1])
     n = sqrt(z[1]^2 + z[2]^2)
     β = power * α
     s,c = sincos(β)
-    n^power * [c, s]
+    n^power * SVector(c, s)
 end
 
 function wedge_map(source_n, target_n, pos)
     a1 = fake_complex_pow(pos, source_n/4)
-    a2 = [1/sqrt(2), 0] - a1
+    a2 = SVector(1/sqrt(2), 0.0) - a1
     a3 = fake_complex_pow(a2, 4/target_n)
     a3
 end
@@ -616,7 +611,7 @@ end
 function view_phase_at_target(v, chart_valence, target_offset)
     central_angle = 2pi / chart_valence
     s,c = sincos(-central_angle * target_offset)
-    rotation = [
+    rotation = @SMatrix [
         c -s 0
         s c 0
         0 0 1
@@ -635,8 +630,10 @@ function chart_transition(v::SituatedPhase, target_offset) # no check on input v
     target_n = valence(neighbor)
     v_near_adj = view_phase_at_target(v, source_n, target_offset)
     wm = Base.Fix1(Base.Fix1(wedge_map, source_n), target_n)
-    v_far_adj_pos = [wm(v_near_adj.pos) ; v_near_adj.pos[3]]
-    v_far_adj_vel = [directional(wm, v_near_adj.pos, v_near_adj.vel) ; v_near_adj.vel[3]]
+    wp = wm(v_near_adj.pos)
+    wv = directional(wm, v_near_adj.pos, v_near_adj.vel)
+    v_far_adj_pos = SVector(wp[1], wp[2], v_near_adj.pos[3])
+    v_far_adj_vel = SVector(wv[1], wv[2], v_near_adj.vel[3])
     far_offset = half_edge_offset(shared_edge_far)
     v_far = view_phase_at_target((pos=v_far_adj_pos, vel=v_far_adj_vel), valence(neighbor), -far_offset)
     SituatedPhase(neighbor, v_far.pos, v_far.vel)

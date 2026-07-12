@@ -12,7 +12,7 @@ LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MeshIO = "7269a6da-0436-5bbc-96c2-40638cbb6118"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
 Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
-TensorOperations = "6aa20fa7-93e2-5fca-9bc0-fbd0db3c71a2"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 TypedPolynomials = "afbbf031-7a57-5f58-a1b9-b774a0fad08d"
 
 [compat]
@@ -24,7 +24,7 @@ LinearAlgebra = "1.12.0"
 MeshIO = "0.5.3"
 Revise = "3.15.1"
 Serialization = "1.11.0"
-TensorOperations = "5.6.2"
+StaticArrays = "1.9.18"
 TypedPolynomials = "0.4.4"
 
 [extras]

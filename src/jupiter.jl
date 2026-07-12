@@ -3,9 +3,9 @@ module jupiter
 using FileIO
 using GeometryBasics
 using LinearAlgebra
-using TensorOperations
 using ForwardDiff
 using Serialization
+using StaticArrays
 using TypedPolynomials
 
 include("meshy.jl")

@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "d6f4f298384d22b5d0ccf931a72973f167b30e0f"
+project_hash = "3e709ddbccdf72d47b3c7af976b4e9c1ace4c8d6"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
@@ -591,7 +591,7 @@ uuid = "83775a58-1f1d-513f-b197-d71354ab007a"
 version = "1.3.1+2"
 
 [[deps.jupiter]]
-deps = ["FileIO", "ForwardDiff", "GeometryBasics", "LinearAlgebra", "MeshIO", "Revise", "Serialization", "TensorOperations", "TypedPolynomials"]
+deps = ["DaemonMode", "FileIO", "ForwardDiff", "GeometryBasics", "LinearAlgebra", "MeshIO", "Revise", "Serialization", "TensorOperations", "TypedPolynomials"]
 path = "."
 uuid = "ad234a27-ae0e-4ebf-9723-76d62c1910c1"
 version = "0.1.0"
