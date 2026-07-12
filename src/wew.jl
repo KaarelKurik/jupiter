@@ -52,8 +52,8 @@ struct ThroatParams
 end
 
 struct Placement # local-to-global; orientation bookkeeping lives here, not in the half-to-half gluing
-    linear::Matrix{Float64}
-    translation::Vector{Float64}
+    linear::SMatrix{3, 3, Float64, 9}
+    translation::SVector{3, Float64}
 end
 
 identity_placement() = Placement([1. 0 0; 0 1 0; 0 0 1], zeros(3))
@@ -106,8 +106,6 @@ end
 
 primal(x) = x
 primal(d::ForwardDiff.Dual) = primal(ForwardDiff.value(d)) # recurse: christoffel nests duals
-
-basis_direction(x, j) = [Float64(i == j) for i in eachindex(x)]
 
 # the one point of contact with the AD library; see taylordiff-bugs.md for why we left TaylorDiff
 directional(f, x, v) = ForwardDiff.derivative(t -> f(x .+ t .* v), 0.0)
@@ -251,9 +249,12 @@ function depth_interpolate(t, om, im) # t = depth / cylinder_depth
 end
 
 function metric(env, chart, pos)
-    om = outer_metric(env, chart, pos)
-    im = inner_metric(env, chart, pos)
-    depth_interpolate(pos[3] / inner_metric_params(env, chart).cylinder_depth, om, im)
+    t = pos[3] / inner_metric_params(env, chart).cylinder_depth
+    # the blend is exactly outer for d ≤ 0 and exactly inner past cylinder_depth
+    # (C^∞-flat ends make the skipped half's weight an exact dual zero there)
+    primal(t) <= 0 && return outer_metric(env, chart, pos)
+    primal(t) >= 1 && return inner_metric(env, chart, pos)
+    depth_interpolate(t, outer_metric(env, chart, pos), inner_metric(env, chart, pos))
 end
 
 function christoffel(env, v::SituatedPhase)
@@ -352,14 +353,14 @@ function half_throat(mouth::Mouth)
 end
 
 struct MouthTriangle # one tessellation triangle of a mouth, with its chart provenance
-    corners # ambient positions
-    sts # square coords of the corners in face_handle's frame
+    corners::NTuple{3, SVector{3, Float64}} # ambient positions
+    sts::NTuple{3, SVector{2, Float64}} # square coords of the corners in face_handle's frame
     face_handle::HalfEdgeHandle
 end
 
 struct BVHNode
-    lo::Vector{Float64}
-    hi::Vector{Float64}
+    lo::SVector{3, Float64}
+    hi::SVector{3, Float64}
     left::Int # 0 for a leaf
     right::Int
     first::Int # leaves: range into the ordering
@@ -427,7 +428,7 @@ function TessellatedMouth(env, half_throat::HalfThroat, samples_per_edge::Int)
         grid = [pl.linear * surface(env, chart, square_coords_to_chart(valence(h), wedge, [i / n, j / n])) + pl.translation
                 for i = 0:n, j = 0:n]
         at(ij) = grid[ij[1] + 1, ij[2] + 1]
-        st(ij) = [ij[1] / n, ij[2] / n]
+        st(ij) = SVector(ij[1] / n, ij[2] / n)
         for j = 0:(n - 1), i = 0:(n - 1)
             a = (i, j); b = (i + 1, j); c = (i + 1, j + 1); d = (i, j + 1)
             push!(triangles, MouthTriangle((at(a), at(b), at(c)), (st(a), st(b), st(c)), h))
@@ -455,7 +456,9 @@ function ray_triangle_intersection(origin, dir, a, b, c) # Moeller-Trumbore; loo
 end
 
 function nearest_mouth_hit(mouth::TessellatedMouth, origin, dir)
-    inv_dir = [1 / (d == 0 ? 1e-300 : d) for d in dir] # dodge 0*Inf NaNs in the slab test
+    origin = SVector{3, Float64}(origin)
+    dir = SVector{3, Float64}(dir)
+    inv_dir = map(d -> 1 / (d == 0 ? 1e-300 : d), dir) # dodge 0*Inf NaNs in the slab test
     best_t = Inf
     best = nothing
     stack = [length(mouth.bvh.nodes)]
@@ -482,6 +485,8 @@ ambient ray -> the SituatedPhase entering this mouth at d = 0, or nothing on a
 miss; origin and dir live in the ambient space of the half_throat's placement
 """
 function enter_mouth(env, mouth::TessellatedMouth, origin, dir)
+    origin = SVector{3, Float64}(origin)
+    dir = SVector{3, Float64}(dir)
     best = nearest_mouth_hit(mouth, origin, dir)
     best === nothing && return nothing
     (τ, bu, bv), tri = best
@@ -490,18 +495,20 @@ function enter_mouth(env, mouth::TessellatedMouth, origin, dir)
     n = valence(tri.face_handle)
     wedge = half_edge_offset(tri.face_handle)
     amb(st) = pl.linear * surface(env, chart, square_coords_to_chart(n, wedge, st)) + pl.translation
-    x = [(1 - bu - bv) * tri.sts[1] + bu * tri.sts[2] + bv * tri.sts[3] ; τ]
+    bary = (1 - bu - bv) * tri.sts[1] + bu * tri.sts[2] + bv * tri.sts[3]
+    x = SVector(bary[1], bary[2], τ)
     for _ in 1:10 # Newton against the exact surface, in (s, t, ray parameter)
-        residual = amb(x[1:2]) - origin - x[3] * dir
+        st = SVector(x[1], x[2])
+        residual = amb(st) - origin - x[3] * dir
         maximum(abs, residual) < 1e-12 && break
-        jac = [directional(amb, x[1:2], [1.0, 0.0]) directional(amb, x[1:2], [0.0, 1.0]) -dir]
+        jac = hcat(directional(amb, st, SVector(1.0, 0.0)), directional(amb, st, SVector(0.0, 1.0)), -dir)
         x = x - jac \ residual
     end
-    w = square_coords_to_chart(n, wedge, x[1:2])
+    w = square_coords_to_chart(n, wedge, SVector(x[1], x[2]))
     pos = SVector(w[1], w[2], 0.0)
     cl = p -> pl.linear * collar(env, chart, p) + pl.translation
-    collar_jac = reduce(hcat, [directional(cl, pos, basis_direction(pos, j)) for j in 1:3])
-    settle_phase(env, SituatedPhase(chart, pos, SVector{3}(collar_jac \ dir)))
+    collar_jac = jacobian_columns(cl, pos, Val(3))
+    settle_phase(env, SituatedPhase(chart, pos, collar_jac \ dir))
 end
 
 function reference_wedge_map(source_n, target_n, pos) # complex powers don't differentiate; test oracle only

@@ -188,9 +188,10 @@ end
     for k in 1:40
         θ = 2pi * k / 40
         φ = pi * mod(k, 7) / 7 - pi / 2
-        origin = 3 * [cos(θ) * cos(φ), sin(θ) * cos(φ), sin(φ)]
+        # same static types both paths, so hit distances compare exactly
+        origin = J.SVector{3, Float64}(3 * [cos(θ) * cos(φ), sin(θ) * cos(φ), sin(φ)])
         target = 0.4 * [sin(3k), cos(2k), sin(5k)]
-        dir = J.generic_normalize(target - origin)
+        dir = J.SVector{3, Float64}(J.generic_normalize(target - origin))
         bf = brute_hit(origin, dir)
         bvh = J.nearest_mouth_hit(mouth, origin, dir)
         @test (bf === nothing) == (bvh === nothing)
