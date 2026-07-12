@@ -63,6 +63,44 @@ ring, as limit-cycle theory predicts). 144 tests green via
   sharing them entangles the clean outer/inner split, kaarel's call.
   `surface_normal_out`'s nested pass inside collar is ~45% of trace time.
 
+## Performance roadmap (2026-07-11 discussion, jotted for later)
+
+Beyond the StaticArrays passes, in rough order of leverage:
+
+- **Dead-half blend skip** (bit-identical: weights are exactly 0/1 outside the
+  open band) and **adaptive stepping** (semantic; reference-first, regenerate
+  physics_diff baselines) — folded into the current pass.
+- **Cylinder-region product structure**: for d ≥ cylinder_depth the metric is
+  d-independent — integrate a 2D surface geodesic + linear depth motion; the
+  expensive winding rays live there.
+- **Chebyshev-tabulated Γ per face×depth box** (~8³ coeffs/component):
+  geometric convergence for a C^∞ metric, likely 10–50x per step; cross-face
+  continuity then only to approximation tolerance (~1e-12) — certify against
+  Reference + physics_diff rather than assume. The single biggest
+  single-machine lever.
+- **Mouth scattering-map caching** (entry point × direction → exit ray, per
+  mouth): amortizes fly-throughs; chaotic bands flagged for true integration.
+- **Jacobi-field adaptive ray bundles** (DNGR-style): trace sparse rays +
+  geodesic deviation, interpolate pixels where the exit map is smooth,
+  subdivide near critical rings — 10–100x fewer rays and principled
+  antialiasing.
+- **GPU port**: the post-StaticArrays core is isbits/kernel-shaped; the real
+  port cost is flattening the Dict-based half-edge/offset lookups to index
+  arrays, concretizing Mouth, and the BVH stack. Float64 is 1/32–1/64 rate on
+  consumer cards — decide Float32 policy (fine away from chaotic bands) with
+  Float64 fallback for flagged pixels. Wavefront-style ray compaction for
+  divergence. Port the winning algorithm (likely tabulated Γ), not the
+  current loop.
+- **Representation alternatives** (research fork): Prautzsch freeform splines /
+  Reif TURBS / Peters–Karčiauskas guided splines give C^k with finite
+  polynomial patches (no transcendental blends — cheaper derivatives,
+  GPU-native, fiddlier construction); YZ is the canonical manifold-based
+  choice, and valence-4-only meshes nearly degenerate its transcendental part
+  anyway. More radical: **level-set throat** — fit a smooth implicit φ and
+  define g = A(φ)(I − n̂n̂ᵀ) + B(φ)n̂n̂ᵀ in one global ambient chart; no atlas,
+  no transitions, no collar caustics; a different but arguably more natural
+  wormhole; current machinery would remain as the physics reference.
+
 Next candidates, kaarel picks the order:
 - **Silhouette tightening**: tessellation-only first-hit gives a polygonal
   wormhole outline (spurious rim misses). `Mouth` is an abstract interface
