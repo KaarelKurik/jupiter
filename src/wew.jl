@@ -87,10 +87,10 @@ struct SituatedPos
     pos
 end
 
-struct AmbientRay # left through a mouth; pos/vel in the ambient flat space of half_throat's placement
+struct AmbientRay{P, V} # left through a mouth; pos/vel in the ambient flat space of half_throat's placement
     half_throat::HalfThroat
-    pos
-    vel
+    pos::P
+    vel::V
 end
 
 function wedge_index_and_angle(n_wedges, pos)
@@ -110,17 +110,29 @@ primal(d::ForwardDiff.Dual) = primal(ForwardDiff.value(d)) # recurse: christoffe
 # the one point of contact with the AD library; see taylordiff-bugs.md for why we left TaylorDiff
 directional(f, x, v) = ForwardDiff.derivative(t -> f(x .+ t .* v), 0.0)
 
+# defined twice under two names: when one jacobian pass runs inside another
+# (jacobian_columns → collar → surface_normal_out → jacobian_columns),
+# inference meets the same method on its own stack and its termination
+# heuristic widens the inner call to Any, boxing the entire geodesic step
+# loop. A structurally identical twin per nesting level keeps every level
+# inferred; inner passes use `nested_jacobian_columns`.
+for jc in (:jacobian_columns, :nested_jacobian_columns)
+    @eval function $jc(f, x, ::Val{N}) where {N}
+        tag = typeof(ForwardDiff.Tag(f, eltype(x)))
+        seeded = SVector{N}(ntuple(i -> ForwardDiff.Dual{tag}(x[i], ntuple(j -> eltype(x)(i == j), Val(N))), Val(N)))
+        fd = f(seeded)
+        hcat(ntuple(j -> ForwardDiff.partials.(fd, j), Val(N))...)
+    end
+end
+
 """
 all coordinate directional derivatives of f at x in one dual pass; returns an
 SMatrix of columns [df/dx_1 ... df/dx_n] like the hcat-of-directionals it
 replaces. N must equal length(x) (passed as Val so everything stack-allocates).
+`nested_jacobian_columns` is its mandatory twin for passes running inside
+another pass; see the comment on the definition loop.
 """
-function jacobian_columns(f, x, ::Val{N}) where {N}
-    tag = typeof(ForwardDiff.Tag(f, eltype(x)))
-    seeded = SVector{N}(ntuple(i -> ForwardDiff.Dual{tag}(x[i], ntuple(j -> eltype(x)(i == j), Val(N))), Val(N)))
-    fd = f(seeded)
-    hcat(ntuple(j -> ForwardDiff.partials.(fd, j), Val(N))...)
-end
+jacobian_columns
 
 flat_bump(x) = primal(x) > 0 ? exp(-1 / x) : zero(x)
 
@@ -213,7 +225,7 @@ end
 
 function surface_normal_out(env, chart, uv)
     s = Base.Fix1(Base.Fix1(surface, env), chart)
-    jac = jacobian_columns(s, uv, Val(2))
+    jac = nested_jacobian_columns(s, uv, Val(2)) # inner pass: runs inside collar's own jacobian, see the twin definition
     generic_normalize(cross(jac[:, 1], jac[:, 2]))
 end
 
@@ -505,25 +517,34 @@ function nearest_mouth_hit(mouth::TessellatedMouth, origin, dir)
     origin = SVector{3, Float64}(origin)
     dir = SVector{3, Float64}(dir)
     inv_dir = map(d -> 1 / (d == 0 ? 1e-300 : d), dir) # dodge 0*Inf NaNs in the slab test
-    best_t = Inf
-    best = nothing
-    stack = [length(mouth.bvh.nodes)]
-    while !isempty(stack)
-        node = mouth.bvh.nodes[pop!(stack)]
-        slab_test(node, origin, inv_dir, best_t) || continue
-        if node.left == 0
-            for k in node.first:(node.first + node.count - 1)
-                tri = mouth.triangles[mouth.bvh.order[k]]
-                hit = ray_triangle_intersection(origin, dir, tri.corners...)
-                (hit === nothing || hit[1] >= best_t) && continue
-                best_t = hit[1]
-                best = (hit, tri)
-            end
-        else
-            push!(stack, node.left, node.right)
+    best_t, best_uv, best_ix = visit_bvh_node(mouth, length(mouth.bvh.nodes), origin, dir, inv_dir, Inf, (0.0, 0.0), 0)
+    best_ix == 0 && return nothing
+    ((best_t, best_uv[1], best_uv[2]), mouth.triangles[best_ix])
+end
+
+# recursion instead of an explicit stack keeps traversal allocation-free. The
+# running best is threaded as (t, (u, v), triangle index; 0 = no hit yet) so
+# the recursive signature stays fixed — a Union-typed accumulator that starts
+# as `nothing` and becomes a tuple re-trips the same inference widening that
+# jacobian_columns needed its twin for. Right child first reproduces the
+# former explicit stack's pop order exactly.
+function visit_bvh_node(mouth::TessellatedMouth, ix, origin, dir, inv_dir, best_t, best_uv, best_ix)
+    node = mouth.bvh.nodes[ix]
+    slab_test(node, origin, inv_dir, best_t) || return (best_t, best_uv, best_ix)
+    if node.left == 0
+        for k in node.first:(node.first + node.count - 1)
+            tri_ix = mouth.bvh.order[k]
+            hit = ray_triangle_intersection(origin, dir, mouth.triangles[tri_ix].corners...)
+            (hit === nothing || hit[1] >= best_t) && continue
+            best_t = hit[1]
+            best_uv = (hit[2], hit[3])
+            best_ix = tri_ix
         end
+    else
+        best_t, best_uv, best_ix = visit_bvh_node(mouth, node.right, origin, dir, inv_dir, best_t, best_uv, best_ix)
+        best_t, best_uv, best_ix = visit_bvh_node(mouth, node.left, origin, dir, inv_dir, best_t, best_uv, best_ix)
     end
-    best
+    (best_t, best_uv, best_ix)
 end
 
 """

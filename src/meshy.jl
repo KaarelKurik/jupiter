@@ -69,19 +69,25 @@ function half_edge_offsets(vertex_neighbors::Vector{Vector{Int}}, half_edges::Di
 end
 
 function handle(m::Mesh, h::HalfEdge)
-    HalfEdgeHandle(m, h.vertices[2:3])
+    v = h.vertices
+    HalfEdgeHandle(m, (v[2], v[3]))
 end
 
+# explicit index pairs: range-slicing an NTuple allocates (StepRange goes
+# through a generic map returning a Vector), and these run in the hot loop
 function next(h::HalfEdgeHandle)
-    HalfEdgeHandle(h.mesh, h.mesh.half_edges[h.name].vertices[3:4])
+    v = h.mesh.half_edges[h.name].vertices
+    HalfEdgeHandle(h.mesh, (v[3], v[4]))
 end
 
 function twin(h::HalfEdgeHandle)
-    HalfEdgeHandle(h.mesh, h.mesh.half_edges[h.name].vertices[3:-1:2])
+    v = h.mesh.half_edges[h.name].vertices
+    HalfEdgeHandle(h.mesh, (v[3], v[2]))
 end
 
 function prev(h::HalfEdgeHandle)
-    HalfEdgeHandle(h.mesh, h.mesh.half_edges[h.name].vertices[1:2])
+    v = h.mesh.half_edges[h.name].vertices
+    HalfEdgeHandle(h.mesh, (v[1], v[2]))
 end
 
 function ccw(h::HalfEdgeHandle)

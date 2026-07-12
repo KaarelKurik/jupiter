@@ -4,6 +4,50 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-12 — per-ray allocation: ~1 MB was one inference failure, not many small ones
+
+**Motivation.** After the StaticArrays pass, ~1 MB/ray remained (trefoil,
+knot-hitting). A priori the tracer needs ~0 heap: a geodesic step is a
+fixed-size state update, outputs land in the preallocated raymap, so the
+algorithm's honest floor is a few boxed sum-type returns per passage
+(`enter_mouth` → `SituatedPhase | nothing`, `trace_geodesic` →
+`AmbientRay | SituatedPhase`), i.e. well under 1 kB/ray.
+
+**Method.** `@allocated` on `trace_ray` for three camera rays (trefoil 
+scene), `Profile.Allocs` at sample_rate 1 grouped by nearest jupiter frame
+and by type; `Test.@inferred` + `code_warntype` bisection down the call tree.
+
+**Findings.**
+
+- Measured 0.7–1.4 MB/ray, ~7 kB and ~42 allocations per RK4 step — closures,
+  `SMatrix`-of-`Dual` intermediates, and `SituatedPhase`s all heap-boxed.
+- Root cause was singular: Julia's *method self-recursion widening*. The chain
+  `jacobian_columns → collar → surface_normal_out → jacobian_columns` puts the
+  same method on the inference stack twice with a grown signature; the
+  termination heuristic widens the inner call to `Any`, which poisons
+  `outer_metric → metric → christoffel → wvel_along_v → geodesic_step` — the
+  entire step loop ran boxed. Every callee inferred fine in isolation; only
+  the nested chain failed. Fix: a structurally identical twin
+  (`nested_jacobian_columns`) for the inner level.
+- Same trap, second appearance: rewriting the BVH traversal recursively with a
+  `nothing`-then-tuple accumulator re-tripped the identical widening
+  (signature grows Nothing → Tuple across the self-call) and re-poisoned
+  `enter_mouth` to 54 kB/ray. Threading fixed-type state
+  `(t, (u, v), tri_index; 0 = none)` fixes it. Moral: in hot recursive/nested
+  code, keep self-call signatures *exactly* constant — Union accumulators and
+  method reuse across nesting levels are both inference hazards that profile
+  as "death by boxing" with no single hot allocation site.
+- Cleanups riding along: `next`/`twin`/`prev` allocated a Vector per call via
+  NTuple range-slicing (`vertices[3:-1:2]` hits a generic `map`); explicit
+  index pairs now. `AmbientRay{P,V}` parametrized; `RayBudget`/`Camera` fields
+  concretized; `Scene` parametric in mouths+sky; BVH stack Vector replaced by
+  the recursion above (right-child-first preserves the old pop order exactly).
+- **After:** 1.5 kB and 3 allocations per knot-hitting ray (the sum-type
+  boxes; per-passage, step loop allocation-free). Knot-hitting ray 5.5 →
+  2.8 ms; trefoil 384×288 render 14.8 → 10.1 s wall on 16 threads. Certified:
+  219/219 cold, physics_diff 0 flips, worst deviation 1.8e-10 (FMA/inlining
+  reordering, within the 1e-9 budget).
+
 ## 2026-07-11 — grazing-ray deflection vs entry angle
 
 **Motivation.** Renders (cube first light, trefoil at cross_scale 1.0 and 0.4)

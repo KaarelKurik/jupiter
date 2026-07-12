@@ -5,7 +5,7 @@ roadmap, and standing conventions. Dated session records live alongside as
 `plan/YYYY-MM-DD.md`. Last updated 2026-07-12. **This file is the resume
 point** — read it plus `jj log` before touching code.
 
-## Where we are (2026-07-11)
+## Where we are (2026-07-12)
 
 The POC pipeline is complete end-to-end: fitted YZ surface → blending → throat
 metric → christoffels → geodesics with chart/half/mouth transitions → BVH mouth
@@ -14,9 +14,12 @@ entry → renderer with two-pass raymap output. First image lives in
 `scripts/trefoil.jl` (heavily scrambled side-2 sky, as a knotted throat
 should). 209 tests green via `julia --project -e 'using Pkg; Pkg.test()'`,
 including reference-equivalence against the `Reference` submodule. The hot
-loop has been through two perf passes (7.5x, then 3.1x from StaticArrays);
-adaptive DP5(4) tracing exists but is opt-in (`RayBudget.tolerance` — see
-2026-07-11 log for why fixed-step stays the render default).
+loop has been through three perf passes (7.5x; 3.1x from StaticArrays; 2x from
+the 2026-07-12 inference fix — knot-hitting ray now 2.8 ms, 384×288 trefoil
+10.1 s, and the tracer allocates ~0: 3 boxed sum-type returns per ray, the
+per-step loop is heap-free). Adaptive DP5(4) tracing exists but is opt-in
+(`RayBudget.tolerance` — see 2026-07-11 log for why fixed-step stays the
+render default).
 
 ## Next candidates, kaarel picks the order
 
@@ -41,12 +44,14 @@ adaptive DP5(4) tracing exists but is opt-in (`RayBudget.tolerance` — see
 
 ## Performance roadmap (2026-07-11 discussion)
 
-Known remaining costs: ~1 MB allocated per ray (Placement in to_ambient and
-mouth tessellation, BVH traversal stack, enter_mouth Newton on plain arrays);
-`metric` evaluates the surface jacobian twice (once inside collar's dual pass,
-once in inner_metric) — sharing them entangles the clean outer/inner split,
-kaarel's call; `surface_normal_out`'s nested pass inside collar is ~45% of
-trace time. In rough order of leverage:
+Known remaining costs (allocation is done — see 2026-07-12 log): `metric`
+evaluates the surface jacobian twice (once inside collar's dual pass, once in
+inner_metric) — sharing them entangles the clean outer/inner split, kaarel's
+call; `surface_normal_out`'s nested pass inside collar was ~45% of trace time
+(pre-inference-fix figure; remeasure before acting). Standing hazard worth
+remembering: nested/recursive hot code must keep self-call signatures exactly
+constant or Julia's inference widens to Any and boxes everything
+(measurements.md 2026-07-12). In rough order of leverage:
 
 - **Cylinder-region product structure**: for d ≥ cylinder_depth the metric is
   d-independent — integrate a 2D surface geodesic + linear depth motion; the

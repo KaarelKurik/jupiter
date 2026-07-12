@@ -1,10 +1,10 @@
 # renderer assembly: everything here lives in ambient flat spaces; the throat
 # interior is trace_geodesic's business
 
-struct Scene # one mouth per side for now; each side's ambient space is its own universe
+struct Scene{MS <: NTuple{2, Mouth}, S} # one mouth per side for now; each side's ambient space is its own universe
     throat::Throat
-    mouths::NTuple{2, Mouth}
-    sky # sky(side, dir) -> rgb in [0,1]^3
+    mouths::MS # parametric so per-passage mouth dispatch stays static
+    sky::S # sky(side, dir) -> rgb in [0,1]^3
 end
 
 """
@@ -20,10 +20,10 @@ it, max_steps counts attempts), which buys explicit accuracy and wins on
 coarse-chart scenes or at tight tolerances.
 """
 struct RayBudget
-    step_size
-    max_steps
-    max_passages
-    tolerance
+    step_size::Float64
+    max_steps::Int
+    max_passages::Int
+    tolerance::Float64
 end
 
 RayBudget(step_size, max_steps, max_passages) = RayBudget(step_size, max_steps, max_passages, 0.0)
@@ -58,9 +58,9 @@ However, the scale of the frame may be observed in a camera transport process,
 if the velocity is proportional to the frame.
 """
 struct Camera
-    pos
-    frame
-    tan_half_fov
+    pos::SVector{3, Float64}
+    frame::SMatrix{3, 3, Float64, 9} # any basis, see above — concrete type, not orthonormality, is what's fixed here
+    tan_half_fov::Float64
 end
 
 function look_at_camera(pos, target, up, fov)
@@ -70,7 +70,7 @@ function look_at_camera(pos, target, up, fov)
 end
 
 function camera_ray(camera::Camera, half_throat::HalfThroat, x, y) # x, y in [-1, 1], x aspect-scaled
-    dir = generic_normalize(camera.frame * [x * camera.tan_half_fov, y * camera.tan_half_fov, 1.0])
+    dir = generic_normalize(camera.frame * SVector(x * camera.tan_half_fov, y * camera.tan_half_fov, 1.0))
     AmbientRay(half_throat, camera.pos, dir)
 end
 
