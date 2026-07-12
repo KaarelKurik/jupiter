@@ -78,7 +78,13 @@ Next candidates, kaarel picks the order:
   companion to geodesic_step; ray emission from inside via SituatedPhase.
 - **Perf**: render is threaded (byte-identical to serial). The 2026-07-11 pass
   took the hot loop 7.5x (see above); next win is StaticArrays through the
-  geometric core.
+  geometric core. Ground truth for aggressive optimization (kaarel's
+  requirement, 2026-07-11): `src/reference.jl` (`Reference` submodule) mirrors
+  the semantic core in its simplest form — same names, plain arrays, naive
+  derivatives — and the "reference equivalence" testset holds production to it
+  pointwise and along side-by-side traces. Deliberate semantic changes go to
+  reference.jl first, then production follows; optimized code stays readable
+  as an elaboration of it.
 
 Working conventions: jj (never bare git mutations); one described change per
 step, `jj new` at seams, describe-as-intent up front; Claude does the jj

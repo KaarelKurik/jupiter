@@ -12,6 +12,7 @@ include("meshy.jl")
 include("wew.jl")
 include("cc.jl")
 include("render.jl")
+include("reference.jl")
 
 export Mesh
 export catmullclark

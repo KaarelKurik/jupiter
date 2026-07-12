@@ -107,11 +107,6 @@ function polynomial_surface(chart, uv)
     eval_packed(packed_polys(geometry(half_throat(chart)))[vertex_index(chart)], uv)
 end
 
-function reference_polynomial_surface(chart, uv) # substitution into the actual polynomials; test oracle for eval_packed
-    @polyvar u v
-    [p(u => uv[1], v => uv[2]) for p in surface_polynomials(chart)]
-end
-
 primal(x) = x
 primal(d::ForwardDiff.Dual) = primal(ForwardDiff.value(d)) # recurse: christoffel nests duals
 

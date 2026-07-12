@@ -55,11 +55,11 @@ end
 end
 
 @testset "packed polynomial evaluation" begin
-    # eval_packed against substitution into the actual polynomials
+    # eval_packed against the reference sum of monomials
     for vix in 1:length(m.vertices), uv in ([0.0, 0.0], [0.3, -0.2], [-0.45, 0.4])
         cc = J.induced_chart(ht, vix)
         @test maximum(abs, J.polynomial_surface(cc, uv) -
-                           J.reference_polynomial_surface(cc, uv)) < 1e-13
+                           J.Reference.polynomial_surface(cc, uv)) < 1e-13
     end
 end
 
@@ -262,6 +262,71 @@ end
     img2 = J.shade(raymap2, flat_sky)
     @test size(img2) == size(img)
     @test all(0 .<= img2 .<= 1)
+end
+
+@testset "reference equivalence" begin
+    # the optimized core against src/reference.jl, pointwise and along traces;
+    # any deliberate semantic change must move both in lockstep
+    R = J.Reference
+
+    uvs = ([0.15, 0.1], [0.3, 0.3], [-0.25, 0.2], [0.1, -0.3], [-0.2, -0.15])
+    for uv in uvs
+        @test maximum(abs, R.surface(nothing, c, uv) - J.surface(nothing, c, uv)) < 1e-12
+    end
+    for uv in uvs[1:3], d in (-0.05, 0.1, 0.3, 0.6)
+        pos = [uv; d]
+        @test maximum(abs, R.metric(nothing, c, pos) - J.metric(nothing, c, pos)) < 1e-11
+    end
+
+    for pos in ([0.2, 0.15, 0.25], [0.3, 0.02, 0.45], [-0.2, 0.1, 0.1])
+        v = J.SituatedPhase(c, pos, [0.1, 0.2, 0.3])
+        @test maximum(abs, R.christoffel(nothing, v) - J.christoffel(nothing, v)) < 1e-9
+        sa = J.geodesic_step(nothing, v, 0.02)
+        sb = R.geodesic_step(nothing, v, 0.02)
+        @test maximum(abs, [sa.pos - sb.pos; sa.vel - sb.vel]) < 1e-11
+    end
+
+    # transitions and settling agree
+    vfar = J.SituatedPhase(c, [0.5, 0.05, 0.2], [0.1, 0.2, 0.3])
+    for offset in 0:(J.valence(c) - 1)
+        ta = J.chart_transition(vfar, offset)
+        tb = R.chart_transition(vfar, offset)
+        @test J.vertex_index(ta.chart) == J.vertex_index(tb.chart)
+        @test maximum(abs, [ta.pos - tb.pos; ta.vel - tb.vel]) < 1e-12
+    end
+    sa = J.settle_phase(nothing, vfar)
+    sb = R.settle_phase(nothing, vfar)
+    @test J.vertex_index(sa.chart) == J.vertex_index(sb.chart)
+    @test maximum(abs, [sa.pos - sb.pos; sa.vel - sb.vel]) < 1e-12
+
+    va = J.to_ambient(nothing, J.SituatedPhase(c, [0.2, 0.15, 0.0], [0.1, 0.2, -0.3]))
+    vb = R.to_ambient(nothing, J.SituatedPhase(c, [0.2, 0.15, 0.0], [0.1, 0.2, -0.3]))
+    @test maximum(abs, [va.pos - vb.pos; va.vel - vb.vel]) < 1e-12
+
+    # side-by-side traces: lateral with chart hops, and across the half handover
+    function both_trace(v0, n, h)
+        va = vb = v0
+        for _ in 1:n
+            va = J.settle_phase(nothing, J.geodesic_step(nothing, va, h))
+            vb = R.settle_phase(nothing, R.geodesic_step(nothing, vb, h))
+        end
+        (va, vb)
+    end
+    for (v0, n) in ((J.SituatedPhase(c, [0.3, 0.02, 0.25], [0.5, 0.2, 0.0]), 60),
+                    (J.SituatedPhase(c, [0.2, 0.15, 0.6], [0.05, 0.05, 0.5]), 60))
+        ta, tb = both_trace(J.settle_phase(nothing, v0), n, 0.01)
+        @test J.vertex_index(ta.chart) == J.vertex_index(tb.chart)
+        @test J.side(J.half_throat(ta.chart)) == J.side(J.half_throat(tb.chart))
+        @test maximum(abs, [ta.pos - tb.pos; ta.vel - tb.vel]) < 1e-9
+    end
+
+    # full drivers agree through a mouth exit
+    vout = J.SituatedPhase(c, [0.2, 0.15, 0.2], [0.05, 0.05, -0.6])
+    ra = J.trace_geodesic(nothing, vout, 0.01, 200)
+    rb = R.trace_geodesic(nothing, vout, 0.01, 200)
+    @test rb isa J.AmbientRay
+    @test J.side(J.half_throat(ra)) == J.side(J.half_throat(rb))
+    @test maximum(abs, [ra.pos - rb.pos; ra.vel - rb.vel]) < 1e-9
 end
 
 @testset "metric tensoriality across transition" begin
