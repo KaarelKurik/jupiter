@@ -4,6 +4,41 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-12 — jacobian_columns twin retired: the inner pass is honestly a different operation, and fusing it makes rays ~18% faster
+
+**Motivation.** The `nested_jacobian_columns` twin (below) worked but smelled
+like a workaround. Question: is there a way to work *with* inference instead?
+
+**Findings.**
+
+- No user-facing knob exists for the per-method recursion-widening heuristic
+  (it fires when the same method appears on inference's own stack with a
+  grown signature — nested `Dual{Tag2, Dual{Tag1}}` types guarantee growth).
+  Alternatives weighed: a concrete typeassert at the inner call site stops
+  the Any from propagating downstream but leaves a dynamic dispatch plus a
+  boxed SMatrix-of-nested-Dual return per collar evaluation (~600 B × several
+  per step ≈ right back at MB/ray); two `directional` passes in
+  surface_normal_out breaks the cycle via a different method but pays an
+  extra primal surface evaluation; OpaqueClosure barriers are exotic. The
+  clean resolution: give the inner level *different semantics* — precedented
+  by ForwardDiff itself, whose hessian is jacobian-over-gradient, distinct
+  methods per nesting level, never jacobian twice.
+- The different semantics were already wanted: collar evaluated the surface
+  twice (plain value + surface_normal_out's dual pass over the same point).
+  New primitive `value_and_jacobian_columns` returns both from one dual pass;
+  the value lane performs exactly the plain evaluation's arithmetic, so the
+  value is bit-identical and free. `jacobian_columns` and it keep separate
+  bodies (any shared helper would re-form the method cycle).
+- **Numbers** (three deterministic knot-hitting trefoil rays: physics_diff
+  aim + two small tilts, cold runs, min of 5): 4.08/5.37/4.98 ms →
+  3.32/4.40/4.06 ms (−18% each); allocation unchanged at 2208 B/ray (the
+  sum-type boxes — confirms no inference regression). Certified: 219/219
+  cold, physics_diff 0 flips with worst deviations bit-identical to the
+  pre-change run (1.34e-14 cube, 1.84e-10 trefoil).
+- Reference keeps the two-evaluation collar: that *is* its simplest correct
+  form; the fused production collar is exactly the kind of elaboration the
+  equivalence testset exists to hold in place.
+
 ## 2026-07-12 — per-ray allocation: ~1 MB was one inference failure, not many small ones
 
 **Motivation.** After the StaticArrays pass, ~1 MB/ray remained (trefoil,

@@ -101,29 +101,39 @@ primal(d::ForwardDiff.Dual) = primal(ForwardDiff.value(d)) # recurse: christoffe
 # the one point of contact with the AD library; see taylordiff-bugs.md for why we left TaylorDiff
 directional(f, x, v) = ForwardDiff.derivative(t -> f(x .+ t .* v), 0.0)
 
-# defined twice under two names: when one jacobian pass runs inside another
-# (jacobian_columns → collar → surface_normal_out → jacobian_columns),
-# inference meets the same method on its own stack and its termination
-# heuristic widens the inner call to Any, boxing the entire geodesic step
-# loop. A structurally identical twin per nesting level keeps every level
-# inferred; inner passes use `nested_jacobian_columns`.
-for jc in (:jacobian_columns, :nested_jacobian_columns)
-    @eval function $jc(f, x, ::Val{N}) where {N}
-        tag = typeof(ForwardDiff.Tag(f, eltype(x)))
-        seeded = SVector{N}(ntuple(i -> ForwardDiff.Dual{tag}(x[i], ntuple(j -> eltype(x)(i == j), Val(N))), Val(N)))
-        fd = f(seeded)
-        hcat(ntuple(j -> ForwardDiff.partials.(fd, j), Val(N))...)
-    end
-end
+# The two dual-pass primitives below must keep separate bodies: when one pass
+# runs inside another (jacobian_columns → collar → the surface pass), any
+# shared method would meet itself on inference's stack with a grown dual-type
+# signature, and the termination heuristic widens that call to Any, boxing the
+# entire geodesic step loop (measurements.md 2026-07-12). Nesting levels must
+# be distinct methods — the same reason ForwardDiff's hessian is jacobian over
+# gradient rather than jacobian twice.
 
 """
 all coordinate directional derivatives of f at x in one dual pass; returns an
 SMatrix of columns [df/dx_1 ... df/dx_n] like the hcat-of-directionals it
 replaces. N must equal length(x) (passed as Val so everything stack-allocates).
-`nested_jacobian_columns` is its mandatory twin for passes running inside
-another pass; see the comment on the definition loop.
 """
-jacobian_columns
+function jacobian_columns(f, x, ::Val{N}) where {N}
+    tag = typeof(ForwardDiff.Tag(f, eltype(x)))
+    seeded = SVector{N}(ntuple(i -> ForwardDiff.Dual{tag}(x[i], ntuple(j -> eltype(x)(i == j), Val(N))), Val(N)))
+    fd = f(seeded)
+    hcat(ntuple(j -> ForwardDiff.partials.(fd, j), Val(N))...)
+end
+
+"""
+f's value together with its jacobian columns, from the same dual pass — the
+value lane performs exactly the plain evaluation's arithmetic, so the value is
+bit-identical to f(x) and free. This is the pass to use under jacobian_columns
+(see the inference note above); that it is a different operation, not a copy,
+is what keeps the nesting honest.
+"""
+function value_and_jacobian_columns(f, x, ::Val{N}) where {N}
+    tag = typeof(ForwardDiff.Tag(f, eltype(x)))
+    seeded = SVector{N}(ntuple(i -> ForwardDiff.Dual{tag}(x[i], ntuple(j -> eltype(x)(i == j), Val(N))), Val(N)))
+    fd = f(seeded)
+    (ForwardDiff.value.(fd), hcat(ntuple(j -> ForwardDiff.partials.(fd, j), Val(N))...))
+end
 
 flat_bump(x) = primal(x) > 0 ? exp(-1 / x) : zero(x)
 
@@ -217,17 +227,19 @@ end
 # type stays concrete for AD tags and inference in the hot paths below
 situate(f, env, chart) = Base.Fix1(Base.Fix1(f, env), chart)
 
+normal_from_columns(jac) = generic_normalize(cross(jac[:, 1], jac[:, 2]))
+
 function surface_normal_out(env, chart, uv)
-    s = situate(surface, env, chart)
-    jac = nested_jacobian_columns(s, uv, Val(2)) # inner pass: runs inside collar's own jacobian, see the twin definition
-    generic_normalize(cross(jac[:, 1], jac[:, 2]))
+    _, jac = value_and_jacobian_columns(situate(surface, env, chart), uv, Val(2))
+    normal_from_columns(jac)
 end
 
 generic_normalize(x) = x ./ sqrt(sum(abs2, x)) # LinearAlgebra.normalize has scaling branches unfriendly to dual numbers
 
-function collar(env, chart, pos)
+function collar(env, chart, pos) # surface point pushed inward: s(u,v) − d·n̂(u,v)
     uv = SVector(pos[1], pos[2])
-    surface(env, chart, uv) - pos[3] * surface_normal_out(env, chart, uv)
+    val, jac = value_and_jacobian_columns(situate(surface, env, chart), uv, Val(2))
+    val - pos[3] * normal_from_columns(jac)
 end
 
 function outer_metric(env, chart, pos)
@@ -518,9 +530,9 @@ end
 # recursion instead of an explicit stack keeps traversal allocation-free. The
 # running best is threaded as (t, (u, v), triangle index; 0 = no hit yet) so
 # the recursive signature stays fixed — a Union-typed accumulator that starts
-# as `nothing` and becomes a tuple re-trips the same inference widening that
-# jacobian_columns needed its twin for. Right child first reproduces the
-# former explicit stack's pop order exactly.
+# as `nothing` and becomes a tuple re-trips the same self-call inference
+# widening described at the dual-pass primitives. Right child first reproduces
+# the former explicit stack's pop order exactly.
 function visit_bvh_node(mouth::TessellatedMouth, ix, origin, dir, inv_dir, best_t, best_uv, best_ix)
     node = mouth.bvh.nodes[ix]
     slab_test(node, origin, inv_dir, best_t) || return (best_t, best_uv, best_ix)

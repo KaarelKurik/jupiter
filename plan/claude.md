@@ -47,11 +47,14 @@ render default).
 Known remaining costs (allocation is done — see 2026-07-12 log): `metric`
 evaluates the surface jacobian twice (once inside collar's dual pass, once in
 inner_metric) — sharing them entangles the clean outer/inner split, kaarel's
-call; `surface_normal_out`'s nested pass inside collar was ~45% of trace time
-(pre-inference-fix figure; remeasure before acting). Standing hazard worth
-remembering: nested/recursive hot code must keep self-call signatures exactly
-constant or Julia's inference widens to Any and boxes everything
-(measurements.md 2026-07-12). In rough order of leverage:
+call. (Collar's *internal* double evaluation is gone: 2026-07-12,
+`value_and_jacobian_columns` fuses value + normal into one dual pass, −18%
+per ray, and retired the `nested_jacobian_columns` twin along the way.)
+Standing hazard worth remembering: nested/recursive hot code must keep
+self-call signatures exactly constant or Julia's inference widens to Any and
+boxes everything (measurements.md 2026-07-12); the dual-pass primitives in
+wew.jl must keep separate bodies for the same reason. In rough order of
+leverage:
 
 - **Cylinder-region product structure**: for d ≥ cylinder_depth the metric is
   d-independent — integrate a 2D surface geodesic + linear depth motion; the
