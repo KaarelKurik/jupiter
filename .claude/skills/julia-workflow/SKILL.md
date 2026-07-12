@@ -23,6 +23,11 @@ description: How to run, test, render, and benchmark Julia code in this repo —
   joins them with spaces). Relative paths resolve against the caller's cwd.
 - `scripts/jd --restart | --stop | --status` — the escape hatch. Restart on
   any suspicion of staleness; if weirdness survives a cold run, it's real.
+- **Benchmarks and any number you'll act on: `--restart` first** (or run
+  cold). 2026-07-11: Revise twice silently failed to apply an edit (a new
+  function, then a redefined convenience constructor) without the die-loudly
+  shim firing — the runs used stale code and produced wrong timings. Cheap
+  insurance: a fresh daemon is ~30s; a wrong conclusion is not.
 - Function edits in `src/` are picked up automatically (Revise). Struct or
   const redefinitions **cannot** be hot-applied: the daemon detects this,
   reports it, and kills itself — the next `jd` call cold-starts. That message

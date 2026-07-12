@@ -12,12 +12,21 @@ compute budget per camera ray. Wormholes admit limit cycles — rays that loop
 through the throat(s) forever instead of escaping — so whoever renders decides
 how hard to chase near-limit rays: step_size and max_steps bound one throat
 passage, max_passages bounds how many times a ray may re-enter a mouth.
+tolerance selects the integrator: 0 (the default) is fixed-step RK4 at
+step_size — the cheaper choice at image accuracy on fine-chart meshes, where
+the per-step chart-displacement cap leaves the DP5 pair no room to stretch;
+tolerance > 0 is the error-controlled Dormand–Prince tracer (step_size seeds
+it, max_steps counts attempts), which buys explicit accuracy and wins on
+coarse-chart scenes or at tight tolerances.
 """
 struct RayBudget
     step_size
     max_steps
     max_passages
+    tolerance
 end
+
+RayBudget(step_size, max_steps, max_passages) = RayBudget(step_size, max_steps, max_passages, 0.0)
 
 """
 follow an ambient ray through however many throat passages the budget allows;
@@ -28,7 +37,9 @@ function trace_ray(env, scene, budget, ray::AmbientRay)
         mouth = scene.mouths[side(half_throat(ray))]
         v = enter_mouth(env, mouth, ray.pos, ray.vel)
         v === nothing && return ray # nothing left to hit but sky
-        res = trace_geodesic(env, v, budget.step_size, budget.max_steps)
+        res = budget.tolerance > 0 ?
+              trace_geodesic(env, v, budget.step_size, budget.max_steps, budget.tolerance) :
+              trace_geodesic(env, v, budget.step_size, budget.max_steps)
         res isa SituatedPhase && return nothing # out of steps inside the throat
         ray = res
     end

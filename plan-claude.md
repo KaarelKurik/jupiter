@@ -67,9 +67,16 @@ ring, as limit-cycle theory predicts). 144 tests green via
 
 Beyond the StaticArrays passes, in rough order of leverage:
 
-- **Dead-half blend skip** (bit-identical: weights are exactly 0/1 outside the
-  open band) and **adaptive stepping** (semantic; reference-first, regenerate
-  physics_diff baselines) — folded into the current pass.
+- **Dead-half blend skip** (bit-identical) — done 2026-07-11 evening.
+  **Adaptive stepping** — done same session (DP5(4), reference-first,
+  `RayBudget.tolerance` opt-in), with a measured caveat: on fine-chart meshes
+  (trefoil: chart |v|∞ ≈ 5.6, so the 0.25-chart-unit displacement cap allows
+  h ≤ 0.045 ≲ the fixed 0.05) the 7-stage pair can't stretch its steps at
+  image tolerances, and costs ~2x the fixed tracer; it wins 2.5x on the cube
+  and delivers *explicit* accuracy (the old fixed-h trefoil renders were
+  ~1e-3/passage). Hence fixed-step remains the render default (tolerance = 0);
+  adaptive is for probes/verification/smooth charts. A lower-order embedded
+  pair might close the gap on fine charts if it ever matters.
 - **Cylinder-region product structure**: for d ≥ cylinder_depth the metric is
   d-independent — integrate a 2D surface geodesic + linear depth motion; the
   expensive winding rays live there.

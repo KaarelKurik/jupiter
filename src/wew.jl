@@ -336,6 +336,52 @@ function trace_geodesic(env, v::SituatedPhase, h, max_steps)
     v # still inside; caller decides whether that's a problem
 end
 
+function flow6(env, chart, u) # phase packed as [pos; vel]
+    vel = SVector(u[4], u[5], u[6])
+    ph = SituatedPhase(chart, SVector(u[1], u[2], u[3]), vel)
+    vcat(vel, wvel_along_v(env, ph, ph))
+end
+
+"""
+one Dormand–Prince 5(4) attempt in a fixed chart: the 5th-order state and the
+embedded 4th-order error estimate (sup norm)
+"""
+function dopri_step(env, chart, u, h)
+    f(x) = flow6(env, chart, x)
+    k1 = f(u)
+    k2 = f(u + h * (1/5)k1)
+    k3 = f(u + h * ((3/40)k1 + (9/40)k2))
+    k4 = f(u + h * ((44/45)k1 - (56/15)k2 + (32/9)k3))
+    k5 = f(u + h * ((19372/6561)k1 - (25360/2187)k2 + (64448/6561)k3 - (212/729)k4))
+    k6 = f(u + h * ((9017/3168)k1 - (355/33)k2 + (46732/5247)k3 + (49/176)k4 - (5103/18656)k5))
+    u5 = u + h * ((35/384)k1 + (500/1113)k3 + (125/192)k4 - (2187/6784)k5 + (11/84)k6)
+    k7 = f(u5)
+    err = h * ((71/57600)k1 - (71/16695)k3 + (71/1920)k4 - (17253/339200)k5 + (22/525)k6 - (1/40)k7)
+    (u5, maximum(abs, err))
+end
+
+"""
+error-controlled trace. h0 seeds the controller; each step is additionally
+capped so it cannot outrun its chart (stages evaluate in one fixed chart,
+trustworthy only out to ~face scale). max_attempts counts accepted AND
+rejected steps: it is the work budget, not the arc length.
+"""
+function trace_geodesic(env, v::SituatedPhase, h0, max_attempts, tol)
+    h = float(h0)
+    for _ in 1:max_attempts
+        h = min(h, 0.25 / (maximum(abs, v.vel) + 1e-12))
+        u = vcat(SVector{3}(v.pos), SVector{3}(v.vel))
+        u5, err = dopri_step(env, v.chart, u, h)
+        scale = tol * (1 + maximum(abs, u))
+        if err <= scale
+            v = settle_phase(env, SituatedPhase(v.chart, SVector(u5[1], u5[2], u5[3]), SVector(u5[4], u5[5], u5[6])))
+            exits_mouth(v) && return to_ambient(env, v)
+        end
+        h = h * clamp(0.9 * (scale / (err + floatmin()))^(1/5), 0.2, 5.0)
+    end
+    v
+end
+
 function half_throat(ray::AmbientRay)
     ray.half_throat
 end

@@ -158,6 +158,19 @@ end
     @test J.side(J.half_throat(r2)) == 2
     @test abs(sum(abs2, r2.vel) - energy(vin)) / energy(vin) < 1e-6
 
+    # adaptive driver: agrees with a tight fixed-step trace, conserves energy.
+    # Exit positions live on the same ambient line but different steppers
+    # overshoot d=0 differently, so positions compare modulo the ray direction.
+    off_ray(a, b) = (dp = a.pos - b.pos; v = J.generic_normalize(b.vel); dp - (dp' * v) * v)
+    vad = J.SituatedPhase(c, [0.2, 0.15, 0.01], [0.05, 0.05, 0.8])
+    ra_fix = J.trace_geodesic(nothing, vad, 0.002, 5000)
+    ra_ad = J.trace_geodesic(nothing, vad, 0.05, 400, 1e-10)
+    @test ra_ad isa J.AmbientRay
+    @test J.side(J.half_throat(ra_ad)) == J.side(J.half_throat(ra_fix))
+    @test maximum(abs, off_ray(ra_ad, ra_fix)) < 1e-5
+    @test maximum(abs, ra_ad.vel - ra_fix.vel) < 1e-5
+    @test abs(sum(abs2, ra_ad.vel) - energy(vad)) / energy(vad) < 1e-8
+
     # reversibility over a short arc that includes a chart hop
     va = J.settle_phase(nothing, J.SituatedPhase(c, [0.3, 0.02, 0.25], [0.5, 0.2, 0.1]))
     vb = va
@@ -328,6 +341,22 @@ end
     @test rb isa J.AmbientRay
     @test J.side(J.half_throat(ra)) == J.side(J.half_throat(rb))
     @test maximum(abs, [ra.pos - rb.pos; ra.vel - rb.vel]) < 1e-9
+
+    # adaptive pieces: one dopri attempt compares tightly; the full driver only
+    # loosely (last-bit differences can flip an accept/reject decision, after
+    # which both remain valid tol-level integrations of the same geodesic)
+    u0 = [0.2, 0.15, 0.25, 0.1, 0.2, 0.3]
+    ua, ea = J.dopri_step(nothing, c, J.SVector{6}(u0), 0.02)
+    ub, eb = R.dopri_step(nothing, c, u0, 0.02)
+    @test maximum(abs, ua - ub) < 1e-11
+    @test abs(ea - eb) < 1e-13
+    aa = J.trace_geodesic(nothing, vout, 0.05, 400, 1e-8)
+    ab = R.trace_geodesic(nothing, vout, 0.05, 400, 1e-8)
+    @test ab isa J.AmbientRay
+    @test J.side(J.half_throat(aa)) == J.side(J.half_throat(ab))
+    dp = aa.pos - ab.pos # positions compare modulo the shared exit line
+    va = J.generic_normalize(ab.vel)
+    @test maximum(abs, [dp - (dp' * va) * va; aa.vel - ab.vel]) < 1e-6
 end
 
 @testset "metric tensoriality across transition" begin
