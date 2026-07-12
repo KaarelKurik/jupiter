@@ -19,7 +19,7 @@ using TypedPolynomials
 using ..jupiter: Chart, SituatedPhase, AmbientRay,
     valence, vertex_index, half_edge_handle, half_throat, induced_chart,
     other_half, params, placement, surface_polynomials, ccw, twin, next,
-    half_edge_offset, wedge_index_and_angle, wedge_square_coords,
+    half_edge_offset, wedge_index, wedge_square_coords,
     square_coords_to_chart, next_corner_coords, blend_scalar, wedge_map,
     primal, generic_normalize
 
@@ -42,8 +42,7 @@ blend_scalar in that corner's unit-square coordinates
 """
 function surface(env, chart, uv)
     n = valence(chart)
-    wix, _ = wedge_index_and_angle(n, primal.(uv))
-    k = Int(mod(wix, n))
+    k = wedge_index(n, primal.(uv))
     corners = [ccw(half_edge_handle(chart), k)]
     sts = [wedge_square_coords(n, k, uv)]
     for _ in 1:3
@@ -167,8 +166,7 @@ function settle_phase(env, v::SituatedPhase, max_hops=8)
             continue
         end
         n = valence(v.chart)
-        wix, _ = wedge_index_and_angle(n, v.pos)
-        k = Int(mod(wix, n))
+        k = wedge_index(n, v.pos)
         st = wedge_square_coords(n, k, v.pos)
         maximum(st) <= 0.5 && return v
         v = chart_transition(v, st[1] >= st[2] ? k : Int(mod(k + 1, n)))

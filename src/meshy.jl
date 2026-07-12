@@ -68,11 +68,6 @@ function half_edge_offsets(vertex_neighbors::Vector{Vector{Int}}, half_edges::Di
     out
 end
 
-function handle(m::Mesh, h::HalfEdge)
-    v = h.vertices
-    HalfEdgeHandle(m, (v[2], v[3]))
-end
-
 # explicit index pairs: range-slicing an NTuple allocates (StepRange goes
 # through a generic map returning a Vector), and these run in the hot loop
 function next(h::HalfEdgeHandle)
@@ -202,13 +197,7 @@ function facerim(f)
     out
 end
 
-function handlefan(m::Mesh, vertex_index::Int)
-    fan = [vertex_induced_handle(m, vertex_index)]
-    for i = 2:length(m.vertex_neighbors[vertex_index])
-        push!(fan, ccw(last(fan)))
-    end
-    fan
-end
+handlefan(m::Mesh, vertex_index::Int) = handlefan(vertex_induced_handle(m, vertex_index))
 
 function vertex_induced_handle(m::Mesh, vertex_index::Int)
     neighbor = first(m.vertex_neighbors[vertex_index])

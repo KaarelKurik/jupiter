@@ -74,6 +74,12 @@ function camera_ray(camera::Camera, half_throat::HalfThroat, x, y) # x, y in [-1
     AmbientRay(half_throat, camera.pos, dir)
 end
 
+function pixel_ray(camera::Camera, half_throat::HalfThroat, i, j, width, height) # pixel centers, row 1 at the top
+    x = (2 * (i - 0.5) / width - 1) * (width / height)
+    y = 1 - 2 * (j - 0.5) / height
+    camera_ray(camera, half_throat, x, y)
+end
+
 function checker_sky(side, dir)
     az = atan(dir[2], dir[1])
     el = asin(clamp(dir[3], -1.0, 1.0))
@@ -98,12 +104,9 @@ it ends up, without committing to any particular sky
 function render_raymap(env, scene, budget, camera::Camera, cam_side::Int, width::Int, height::Int)
     raymap = RayMap(zeros(Int, width, height), zeros(3, width, height), zeros(3, width, height))
     cam_space = HalfThroat(scene.throat, cam_side)
-    aspect = width / height
     Threads.@threads for j in 1:height
         for i in 1:width
-            x = (2 * (i - 0.5) / width - 1) * aspect
-            y = 1 - 2 * (j - 0.5) / height
-            out = trace_ray(env, scene, budget, camera_ray(camera, cam_space, x, y))
+            out = trace_ray(env, scene, budget, pixel_ray(camera, cam_space, i, j, width, height))
             out === nothing && continue
             raymap.side[i, j] = side(half_throat(out))
             raymap.pos[:, i, j] = out.pos
@@ -139,12 +142,9 @@ function render_flat(env, scene, camera::Camera, cam_side::Int, width::Int, heig
     img = zeros(3, width, height)
     cam_space = HalfThroat(scene.throat, cam_side)
     mouth = scene.mouths[cam_side]
-    aspect = width / height
     Threads.@threads for j in 1:height
         for i in 1:width
-            x = (2 * (i - 0.5) / width - 1) * aspect
-            y = 1 - 2 * (j - 0.5) / height
-            ray = camera_ray(camera, cam_space, x, y)
+            ray = pixel_ray(camera, cam_space, i, j, width, height)
             hit = nearest_mouth_hit(mouth, ray.pos, ray.vel)
             if hit === nothing
                 img[:, i, j] = scene.sky(cam_side, ray.vel)

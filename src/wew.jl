@@ -1,6 +1,4 @@
 
-greet() = print("Hello World!")
-
 # Let's just make half-edges a thick concept, fuck it
 
 struct Surface
@@ -82,22 +80,15 @@ struct SituatedPhase{P, V} # pos/vel parametric so the integrator's phases are f
     vel::V
 end
 
-struct SituatedPos
-    chart::Chart
-    pos
-end
-
 struct AmbientRay{P, V} # left through a mouth; pos/vel in the ambient flat space of half_throat's placement
     half_throat::HalfThroat
     pos::P
     vel::V
 end
 
-function wedge_index_and_angle(n_wedges, pos)
+function wedge_index(n_wedges, pos)
     α = atan(pos[2], pos[1])
-    ix = floor((α * n_wedges)/(2pi))
-    remainder = α - ix * (2pi / n_wedges)
-    (ix, remainder)
+    Int(mod(floor((α * n_wedges)/(2pi)), n_wedges))
 end
 
 function polynomial_surface(chart, uv)
@@ -176,8 +167,7 @@ end
 
 function surface(env, chart, uv)
     n = valence(chart)
-    wix, _ = wedge_index_and_angle(n, primal.(uv))
-    k = Int(mod(wix, n))
+    k = wedge_index(n, primal.(uv))
     corner = ccw(half_edge_handle(chart), k)
     st = wedge_square_coords(n, k, uv)
     weight, acc = corner_contribution(chart, corner, st)
@@ -223,8 +213,12 @@ function sample_surface(half_throat::HalfThroat, samples_per_edge::Int)
     (vertices, faces)
 end
 
+# f(pos)-shaped view of f(env, chart, pos); Fix1 (not a closure) so the callable's
+# type stays concrete for AD tags and inference in the hot paths below
+situate(f, env, chart) = Base.Fix1(Base.Fix1(f, env), chart)
+
 function surface_normal_out(env, chart, uv)
-    s = Base.Fix1(Base.Fix1(surface, env), chart)
+    s = situate(surface, env, chart)
     jac = nested_jacobian_columns(s, uv, Val(2)) # inner pass: runs inside collar's own jacobian, see the twin definition
     generic_normalize(cross(jac[:, 1], jac[:, 2]))
 end
@@ -237,7 +231,7 @@ function collar(env, chart, pos)
 end
 
 function outer_metric(env, chart, pos)
-    cl = Base.Fix1(Base.Fix1(collar, env), chart)
+    cl = situate(collar, env, chart)
     collar_jac = jacobian_columns(cl, pos, Val(3))
     collar_jac' * collar_jac
 end
@@ -247,7 +241,7 @@ function inner_metric_params(env, chart)
 end
 
 function inner_metric(env, chart, pos)
-    sf = Base.Fix1(Base.Fix1(surface, env), chart)
+    sf = situate(surface, env, chart)
     params = inner_metric_params(env, chart)
     sf_jac = jacobian_columns(sf, SVector(pos[1], pos[2]), Val(2))
     g = params.cross_scale * sf_jac' * sf_jac
@@ -270,7 +264,7 @@ function metric(env, chart, pos)
 end
 
 function christoffel(env, v::SituatedPhase)
-    mf = Base.Fix1(Base.Fix1(metric, env), v.chart)
+    mf = situate(metric, env, v.chart)
     # one dual pass with a 3-partial seed: metric value and all three derivatives together
     tag = typeof(ForwardDiff.Tag(mf, eltype(v.pos)))
     seeded = SVector{3}(ntuple(i -> ForwardDiff.Dual{tag}(v.pos[i], ntuple(j -> eltype(v.pos)(i == j), Val(3))), Val(3)))
@@ -292,7 +286,7 @@ end
 
 function to_ambient(env, v::SituatedPhase)
     pl = placement(half_throat(v.chart))
-    cl = Base.Fix1(Base.Fix1(collar, env), v.chart)
+    cl = situate(collar, env, v.chart)
     AmbientRay(half_throat(v.chart), pl.linear * cl(v.pos) + pl.translation, pl.linear * directional(cl, v.pos, v.vel))
 end
 
@@ -316,8 +310,7 @@ function settle_phase(env, v::SituatedPhase, max_hops=8)
             continue
         end
         n = valence(v.chart)
-        wix, _ = wedge_index_and_angle(n, v.pos)
-        k = Int(mod(wix, n))
+        k = wedge_index(n, v.pos)
         st = wedge_square_coords(n, k, v.pos)
         maximum(st) <= 0.5 && return v
         v = chart_transition(v, st[1] >= st[2] ? k : Int(mod(k + 1, n)))
