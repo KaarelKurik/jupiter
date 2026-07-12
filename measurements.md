@@ -44,7 +44,9 @@ curves back into the ray's path, which masquerades as a discontinuity at θ = 0.
   are h-converged at h = 0.02/0.01/0.005), with no feature at θ = 0 and a
   smooth branch (incl. smooth max of δ) for θ > 0.016.
 
-**Conclusions.**
+**Conclusions.** (See also the collar-caustic entry below: cylinder_depth is
+not capped by collar self-intersection, so it is a genuinely free gentleness
+knob, up to the in-principle limits in the last point.)
 
 - The geodesic/chart-transition/integration machinery shows no discontinuity or
   step-size artifact anywhere: smooth branches are smooth and h-converged;
@@ -58,3 +60,20 @@ curves back into the ray's path, which masquerades as a discontinuity at θ = 0.
   plunge and scramble. Softening knobs are limited in principle: head-on rays
   must traverse, so all lensing has to happen between a grazing ray and the
   nearest head-on ray, and there is not a lot of daylight between them.
+
+## Recorded 2026-07-11, measured in an earlier session — collar caustics are benign
+
+**Question.** Past the limit surface's focal radius the collar map
+self-intersects (a caustic; its Jacobian drops rank), which naively caps
+cylinder_depth. Does pushing cylinder_depth past the caustic make the blended
+geometry singular?
+
+**Conclusion.** No — cylinder_depth can be made arbitrarily high. The final
+space is a genuine Riemannian 3-manifold regardless: on the open band the
+blend has strictly positive inner weight, and g_outer = JᵀJ stays smooth even
+past the caustic (merely dropping rank on it), so the blend is smooth and
+eigenvalue-floored by (1−w)·λ_min(g_inner). Empirically: with cylinder_depth
+pushed to 0.6 (cube), det(g_outer) bottoms out at 3×10⁻⁸ at d = 0.5 (neatly
+measuring the limit surface's focal radius) and re-grows, while the blend's
+λ_min never dips below 0.017. The one true validity condition is immersedness
+of the fitted YZ surface — unrelated to focal depth.
