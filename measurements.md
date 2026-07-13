@@ -54,6 +54,19 @@ at the parent commit.
   Right-child-first descent preserves the recursive visit order, so best-hit
   evolution is bit-identical: physics_diff again 1.34e-14/1.84e-10, 0 flips,
   275/275 cold.
+- **Step 3 (device smoke), RTX 4070 SUPER, Float64, 1M points each**
+  (scripts/gpu_smoke.jl, gpu/ subenv): eval_packed Horner kernel
+  **bit-identical** to CPU (max |Δ| = 0.0), 0.78 ms = 1.29 Geval/s, 76x one
+  CPU thread. The ad.jl dual pass (value_and_jacobian_columns through
+  square_coords_to_chart → fake_complex_pow/safe_atan2) — ForwardDiff duals,
+  StaticArrays, closures, SMatrix hcat — compiles clean on device: 5.8 ms =
+  172 Meval/s, 31x one thread, max deviation 7.2e-16 value / 5.0e-15
+  jacobian (fma/libm reordering). 56/78 registers — headroom for a full RK4
+  step. **No compilability wall in the AD core.** Remaining port cost is
+  what we already knew: device throat view (flattened packed_polys), and the
+  per-passage sum-type boxes (kernels can't heap-allocate → wavefront
+  restructure). eval_packed's signature loosened to AbstractArray{Float64,3}
+  so device arrays dispatch to the same body.
 
 ## 2026-07-13 — temporal sampling for fly-through video: the flow-rate profile, and two ways a flow controller can die
 

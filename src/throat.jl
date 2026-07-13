@@ -25,7 +25,7 @@ function pack_polys(polys)
     packed
 end
 
-function eval_packed(packed::Array{Float64, 3}, uv)
+function eval_packed(packed::AbstractArray{Float64, 3}, uv) # Abstract so device-side array types dispatch here too
     u, v = uv[1], uv[2]
     SVector(ntuple(Val(3)) do component
         acc_u = zero(u) * zero(v)

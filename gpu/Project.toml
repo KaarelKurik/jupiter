@@ -1,0 +1,3 @@
+[deps]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+jupiter = "ad234a27-ae0e-4ebf-9723-76d62c1910c1"
