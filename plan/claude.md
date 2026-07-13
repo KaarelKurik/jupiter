@@ -2,8 +2,8 @@
 
 Companion to kaarel's journal (`plan/kaarel.md`); holds current state, the
 roadmap, and standing conventions. Dated session records live alongside as
-`plan/YYYY-MM-DD.md`. Last updated 2026-07-12. **This file is the resume
-point** — read it plus `jj log` before touching code.
+`plan/YYYY-MM-DD.md`. Last updated 2026-07-13 (second session). **This file
+is the resume point** — read it plus `jj log` before touching code.
 
 ## Where we are (2026-07-13)
 
@@ -19,19 +19,26 @@ cold, physics_diff bit-stable all session. Perf state: knot-hitting ray
 ~3.3-4.4 ms (collar single-pass −18%, 2026-07-12b), tracer allocates ~3-4
 boxed sum-type returns per ray, step loops heap-free. The honest
 constant-speed video (uniform Δτ=0.0037 → ~1670 frames) is deliberately
-deferred: CPU render cost is the binding constraint now — kaarel's cue to
-start GPU groundwork. Gallery: first_light, textured trefoil.
+deferred: CPU render cost is the binding constraint now. GPU groundwork
+steps 1–3 landed 2026-07-13 (second session): half-edge connectivity is flat
+id-indexed arrays, the mouth is isbits with a threaded (stackless) BVH, and
+the device smoke test passed — eval_packed bit-identical on the RTX 4070
+SUPER, the ad.jl dual pass compiles clean at 31–76x one CPU thread
+(measurements.md 2026-07-13b). No compilability wall in the AD core.
+Gallery: first_light, textured trefoil, cube first flythrough.
 
 ## Next candidates, kaarel picks the order
 
-- **GPU port groundwork** (kaarel, 2026-07-13, wrapping the fly-through
-  session): video rendering makes CPU cost the binding constraint (19 min
-  for the 187-frame median-controller stretch at 192×144; the honest
-  constant-speed cut ≈ 1670 frames was deferred for exactly this). Port
-  shape and pitfalls are in the perf roadmap's GPU bullet below — flatten
-  Dict-based half-edge/offset lookups, concretize Mouth, Float32 policy,
-  wavefront compaction; port the winning algorithm (likely tabulated Γ),
-  not necessarily the current loop.
+- **GPU port, steps 4–5** (steps 1–3 done 2026-07-13b; decision that session:
+  CPU-first groundwork aiming at mechanical device translation; tiering is a
+  chain — GPU certified against production, production against reference,
+  reference the sole oracle). Step 4: tabulated Γ developed on CPU against
+  reference (port the winning algorithm, not the current loop — see the
+  roadmap bullet below). Step 5: the real port — device throat view
+  (packed_polys still Vector{Array}, needs one padded/offset array), wavefront
+  restructure of the passage loop (kernels can't heap-allocate the per-passage
+  sum-type boxes), Float32 policy measured against Float64-on-device.
+  `gpu/` subenv holds CUDA.jl; `scripts/gpu_smoke.jl` is the compile check.
 - **Silhouette tightening**: tessellation-only first-hit gives a polygonal
   wormhole outline (spurious rim misses). `Mouth` is an abstract interface
   ready for a second strategy (outward-offset tessellation, or a conservative
