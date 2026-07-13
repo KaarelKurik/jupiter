@@ -161,6 +161,34 @@ end
 save_raymap(path, raymap::RayMap) = open(io -> serialize(io, raymap), path, "w")
 load_raymap(path) = open(deserialize, path)
 
+"""
+equirectangular texture lookup: azimuth wraps around the image width, elevation
+runs top row = zenith; bilinear filtering, azimuth-wrapping and pole-clamping.
+img is 3 x width x height in [0,1], the layout save_ppm/load_ppm use.
+"""
+function sample_equirect(img, dir)
+    _, w, h = size(img)
+    az = atan(dir[2], dir[1])
+    el = asin(clamp(dir[3], -1.0, 1.0))
+    x = (az + pi) / (2pi) * w + 0.5 # continuous pixel coords, texel centers at integers
+    y = (1 - (el + pi / 2) / pi) * h + 0.5
+    x0 = floor(Int, x); tx = x - x0
+    y0 = floor(Int, y); ty = y - y0
+    xi(k) = mod(k - 1, w) + 1
+    yi(k) = clamp(k, 1, h)
+    texel(i, j) = SVector(img[1, i, j], img[2, i, j], img[3, i, j])
+    (1 - ty) * ((1 - tx) * texel(xi(x0), yi(y0)) + tx * texel(xi(x0 + 1), yi(y0))) +
+    ty * ((1 - tx) * texel(xi(x0), yi(y0 + 1)) + tx * texel(xi(x0 + 1), yi(y0 + 1)))
+end
+
+struct TexturedSky # a Scene-ready sky: one equirectangular texture per side
+    images::NTuple{2, Array{Float64, 3}}
+end
+
+TexturedSky(img1, img2) = TexturedSky((img1, img2))
+
+(sky::TexturedSky)(side, dir) = sample_equirect(sky.images[side], dir)
+
 function save_ppm(path, img)
     _, w, h = size(img)
     open(path, "w") do io
@@ -168,5 +196,49 @@ function save_ppm(path, img)
         for j in 1:h, i in 1:w
             println(io, join(round.(Int, clamp.(img[:, i, j], 0, 1) * 255), " "))
         end
+    end
+end
+
+function ppm_token(io) # next whitespace-delimited header token; '#' comments run to end of line
+    tok = IOBuffer()
+    while !eof(io)
+        ch = read(io, Char)
+        if ch == '#'
+            readline(io)
+        elseif isspace(ch)
+            position(tok) > 0 && return String(take!(tok))
+        else
+            write(tok, ch)
+        end
+    end
+    String(take!(tok))
+end
+
+"""
+reads a P3 (ASCII) or P6 (binary, 8-bit) PPM into the 3 x width x height [0,1]
+layout save_ppm writes. The route for real images: `magick x.png x.ppm` emits P6.
+"""
+function load_ppm(path)
+    open(path) do io
+        magic = ppm_token(io)
+        w = parse(Int, ppm_token(io))
+        h = parse(Int, ppm_token(io))
+        maxval = parse(Int, ppm_token(io))
+        img = zeros(3, w, h)
+        if magic == "P6"
+            maxval <= 255 || error("16-bit P6 unsupported (maxval $maxval)")
+            data = read(io, 3 * w * h) # binary payload starts right after the single whitespace ppm_token consumed
+            length(data) == 3 * w * h || error("truncated P6 payload in $path")
+            for j in 1:h, i in 1:w, c in 1:3
+                img[c, i, j] = data[3 * ((j - 1) * w + i - 1) + c] / maxval
+            end
+        elseif magic == "P3"
+            for j in 1:h, i in 1:w, c in 1:3
+                img[c, i, j] = parse(Int, ppm_token(io)) / maxval
+            end
+        else
+            error("unsupported PPM magic '$magic' in $path")
+        end
+        img
     end
 end

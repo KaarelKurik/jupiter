@@ -278,6 +278,48 @@ end
     @test all(0 .<= img2 .<= 1)
 end
 
+@testset "textured sky" begin
+    # save_ppm -> load_ppm round trip is exact after 8-bit quantization
+    img = zeros(3, 7, 5)
+    for j in 1:5, i in 1:7, ch in 1:3
+        img[ch, i, j] = mod(11 * ch + 5 * i + 3 * j, 32) / 31
+    end
+    path = tempname() * ".ppm"
+    J.save_ppm(path, img)
+    @test J.load_ppm(path) == round.(img .* 255) ./ 255
+
+    # P6 with a header comment, hand-written fixture
+    p6 = tempname() * ".ppm"
+    open(io -> write(io, "P6\n# comment\n2 1\n255\n", UInt8[255, 0, 0, 0, 128, 255]), p6, "w")
+    img6 = J.load_ppm(p6)
+    @test img6[:, 1, 1] == [1.0, 0.0, 0.0]
+    @test img6[:, 2, 1] ≈ [0.0, 128 / 255, 1.0]
+
+    # equirect sampling: constant texture is constant in every direction
+    flat = ones(3, 8, 4) .* reshape([0.2, 0.5, 0.8], 3, 1, 1)
+    for dir in ([1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1], J.generic_normalize([1, 2, 3]))
+        @test J.sample_equirect(flat, dir) ≈ [0.2, 0.5, 0.8]
+    end
+    # zenith/nadir hit the top/bottom rows; azimuth wraps continuously across ±pi
+    updown = zeros(3, 8, 4)
+    updown[1, :, 1] .= 1.0 # top row red
+    updown[3, :, 4] .= 1.0 # bottom row blue
+    @test J.sample_equirect(updown, [0, 0, 1]) ≈ [1, 0, 0]
+    @test J.sample_equirect(updown, [0, 0, -1]) ≈ [0, 0, 1]
+    seam = J.load_ppm(p6) # 2x1: red | teal
+    ε = 1e-9
+    left = J.sample_equirect(seam, [cos(pi - ε), sin(pi - ε), 0.0])
+    right = J.sample_equirect(seam, [cos(-pi + ε), sin(-pi + ε), 0.0])
+    @test maximum(abs, left - right) < 1e-6
+
+    # TexturedSky dispatches on side and slots into shade
+    sky = J.TexturedSky(flat, updown)
+    @test sky(1, [0, 0, 1]) ≈ [0.2, 0.5, 0.8]
+    @test sky(2, [0, 0, 1]) ≈ [1, 0, 0]
+    rm = J.RayMap(fill(2, 1, 1), reshape(zeros(3), 3, 1, 1), reshape([0.0, 0.0, 1.0], 3, 1, 1))
+    @test J.shade(rm, sky)[:, 1, 1] ≈ [1, 0, 0]
+end
+
 @testset "reference equivalence" begin
     # the optimized core against src/reference.jl, pointwise and along traces;
     # any deliberate semantic change must move both in lockstep
