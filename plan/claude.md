@@ -35,11 +35,14 @@ render default).
 - **David mesh path**: res/models/*.stl are triangles; fit_geometry assumes
   quads, so one CC pre-subdivision or a quad remesh comes first; also STL
   loading. (`scripts/david.jl` scaffolding is in kaarel's working copy.)
-- **Camera transport / fly-through**: reference impl done 2026-07-12
-  (reference.jl: transport_flow/transport_step joint RK4, map_frame riding
-  transitions, settle_transport, trace_transport, emit_ray; invariants
-  tested — Gram matrix conserved through hops/handover, reversible, collar
-  isometry at exit). Remaining: production port + fly-through rendering.
+- **Camera transport / fly-through**: reference impl AND production port done
+  2026-07-12 (reference.jl + geodesic.jl: transport_flow/transport_step joint
+  RK4 with one shared Γ per step, map_frame riding transitions,
+  settle_transport — mirrors settle_phase, keep hop decisions in sync —
+  trace_transport, emit_ray; SMatrix frames, 0 B/step incl. hops, 448 B
+  boundary box per trace; invariants + reference equivalence tested).
+  Remaining: fly-through rendering — a camera path, transported frames per
+  keyframe, and a render_raymap variant starting from SituatedPhase cameras.
   Camera = point + arbitrary frame (NOT necessarily orthonormal — no global
   metric with non-isometric placements; loop holonomy may rescale/shear, and
   should).

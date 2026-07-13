@@ -384,6 +384,31 @@ end
     @test J.side(J.half_throat(ra)) == J.side(J.half_throat(rb))
     @test maximum(abs, [ra.pos - rb.pos; ra.vel - rb.vel]) < 1e-9
 
+    # transport: production SMatrix frames against the reference, one step
+    # tightly, a settled trace with chart hops, and a full trace to ambient
+    E0 = [1.0 0.2 0.5; 0.0 1.1 0.2; 0.3 0.0 0.9]
+    Es = J.SMatrix{3, 3, Float64}(E0)
+    vt = J.SituatedPhase(c, [0.2, 0.15, 0.25], [0.1, 0.2, 0.3])
+    (va1, Ea1), (vb1, Eb1) = J.transport_step(nothing, vt, Es, 0.02), R.transport_step(nothing, vt, E0, 0.02)
+    @test maximum(abs, [va1.pos - vb1.pos; va1.vel - vb1.vel]) < 1e-11
+    @test maximum(abs, Ea1 - Eb1) < 1e-11
+    va, Ea = J.settle_phase(nothing, J.SituatedPhase(c, [0.3, 0.02, 0.25], [0.5, 0.2, 0.1])), Es
+    vb, Eb = va, E0
+    for _ in 1:60
+        va, Ea = J.settle_transport(nothing, J.transport_step(nothing, va, Ea, 0.01)...)
+        vb, Eb = R.settle_transport(nothing, R.transport_step(nothing, vb, Eb, 0.01)...)
+    end
+    @test J.vertex_index(va.chart) == J.vertex_index(vb.chart)
+    @test maximum(abs, [va.pos - vb.pos; va.vel - vb.vel]) < 1e-9
+    @test maximum(abs, Ea - Eb) < 1e-9
+    vout_t = J.SituatedPhase(c, [0.2, 0.15, 0.2], [0.05, 0.05, -0.6])
+    (ra_t, Aa), (rb_t, Ab) = J.trace_transport(nothing, vout_t, Es, 0.01, 200), R.trace_transport(nothing, vout_t, E0, 0.01, 200)
+    @test ra_t isa J.AmbientRay && rb_t isa J.AmbientRay
+    @test maximum(abs, [ra_t.pos - rb_t.pos; ra_t.vel - rb_t.vel]) < 1e-9
+    @test maximum(abs, Aa - Ab) < 1e-9
+    @test J.emit_ray(c, J.SVector(0.2, 0.15, 0.01), Es, tan(pi / 8), 0.1, -0.2).vel ≈
+          R.emit_ray(c, [0.2, 0.15, 0.01], E0, tan(pi / 8), 0.1, -0.2).vel
+
     # adaptive pieces: one dopri attempt compares tightly; the full driver only
     # loosely (last-bit differences can flip an accept/reject decision, after
     # which both remain valid tol-level integrations of the same geodesic)

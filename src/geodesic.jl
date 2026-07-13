@@ -57,9 +57,11 @@ function christoffel(env, v::SituatedPhase)
     end)
 end
 
+# the transport law's right-hand side: covariant rate of w carried along vel
+christoffel_pull(Γ, vel, w) = SVector{3}(ntuple(k -> -sum(vel[i] * w[j] * Γ[k, i, j] for i in 1:3, j in 1:3), Val(3)))
+
 function wvel_along_v(env, v::SituatedPhase, w::SituatedPhase)
-    c = christoffel(env, v)
-    SVector{3}(ntuple(k -> -sum(v.vel[i] * w.vel[j] * c[k, i, j] for i in 1:3, j in 1:3), Val(3)))
+    christoffel_pull(christoffel(env, v), v.vel, w.vel)
 end
 
 function to_ambient(env, v::SituatedPhase)
@@ -163,4 +165,87 @@ function trace_geodesic(env, v::SituatedPhase, h0, max_attempts, tol)
         h = h * clamp(0.9 * (scale / (err + floatmin()))^(1/5), 0.2, 5.0)
     end
     v
+end
+
+# ---- camera transport: parallel transport of a frame along a geodesic ----
+# elaboration of the reference (see reference.jl for the law and the comment on
+# connection vs metric transport); the conserved object is the Gram matrix
+# E' g E. One Γ evaluation feeds the velocity and every frame column.
+
+function transport_flow(env, v::SituatedPhase, E::SMatrix{3, N}) where {N}
+    Γ = christoffel(env, v)
+    (v.vel, christoffel_pull(Γ, v.vel, v.vel),
+     hcat(ntuple(col -> christoffel_pull(Γ, v.vel, E[:, col]), Val(N))...))
+end
+
+function transport_step(env, v::SituatedPhase, E::SMatrix, h) # one RK4 step of (pos, vel, frame), staying in v's chart
+    stage(k, s) = (SituatedPhase(v.chart, v.pos + s * k[1], v.vel + s * k[2]), E + s * k[3])
+    k1 = transport_flow(env, v, E)
+    k2 = transport_flow(env, stage(k1, h / 2)...)
+    k3 = transport_flow(env, stage(k2, h / 2)...)
+    k4 = transport_flow(env, stage(k3, h)...)
+    dpos = (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]) / 6
+    dvel = (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]) / 6
+    dE = (k1[3] + 2 * k2[3] + 2 * k3[3] + k4[3]) / 6
+    (SituatedPhase(v.chart, v.pos + h * dpos, v.vel + h * dvel), E + h * dE)
+end
+
+"""
+apply a phase transition f to every column of a frame at v: transitions act on
+tangent vectors by their differential, i.e. exactly as they act on velocities
+"""
+function map_frame(v::SituatedPhase, E::SMatrix{3, N}, f) where {N}
+    hcat(ntuple(col -> f(SituatedPhase(v.chart, v.pos, E[:, col])).vel, Val(N))...)
+end
+
+function chart_transition(v::SituatedPhase, E::SMatrix, target_offset)
+    (chart_transition(v, target_offset), map_frame(v, E, w -> chart_transition(w, target_offset)))
+end
+
+function half_transition(v::SituatedPhase, E::SMatrix)
+    (half_transition(v), map_frame(v, E, half_transition))
+end
+
+# mirrors settle_phase; keep the hop decisions in sync (they must see the same v)
+function settle_transport(env, v::SituatedPhase, E::SMatrix, max_hops=8)
+    for _ in 1:max_hops
+        if v.pos[3] > params(half_throat(v.chart)).transition_depth
+            v, E = half_transition(v, E)
+            continue
+        end
+        n = valence(v.chart)
+        k = wedge_index(n, v.pos)
+        st = wedge_square_coords(n, k, v.pos)
+        maximum(st) <= 0.5 && return (v, E)
+        v, E = chart_transition(v, E, st[1] >= st[2] ? k : Int(mod(k + 1, n)))
+    end
+    (v, E)
+end
+
+function to_ambient(env, v::SituatedPhase, E::SMatrix{3, N}) where {N} # frame columns out via the collar differential
+    cl = situate(collar, env, v.chart)
+    pl = placement(half_throat(v.chart))
+    (to_ambient(env, v), hcat(ntuple(col -> pl.linear * directional(cl, v.pos, E[:, col]), Val(N))...))
+end
+
+"""
+trace a geodesic while parallel-transporting the frame E (SMatrix of
+tangent-vector columns) along it; returns (AmbientRay, ambient frame) on mouth
+exit, (SituatedPhase, E) when out of steps
+"""
+function trace_transport(env, v::SituatedPhase, E::SMatrix, h, max_steps)
+    for _ in 1:max_steps
+        v, E = settle_transport(env, transport_step(env, v, E, h)...)
+        exits_mouth(v) && return to_ambient(env, v, E)
+    end
+    (v, E)
+end
+
+"""
+ray emission from a camera inside the throat: camera = chart point + frame
+(columns right, up, forward — any basis, like Camera); x, y in [-1, 1] pick
+the pixel direction, and the result is ready for trace_geodesic
+"""
+function emit_ray(chart, pos, frame, tan_half_fov, x, y)
+    SituatedPhase(chart, pos, frame * SVector(x * tan_half_fov, y * tan_half_fov, 1.0))
 end
