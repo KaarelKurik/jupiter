@@ -36,10 +36,17 @@ skies, camera straight through the throat, τ 0→6.5. scripts/flyvideo.jl.
   q90/max stay in the log as an audit of the chaotic population.
 - **Chaotic shimmer is image-space aliasing, not temporal undersampling** —
   no frame density smooths it (it needs ray bundles / supersampling, see
-  roadmap). The moment the camera crossed d=0 the chaos collapsed
-  (q90≈max≈median, flips 0, unresolved 0): the shimmer population is
-  exterior grazing sightlines across the critical ring; the interior view is
-  coherently lensed and cheap to sample.
+  roadmap). The sensitive population clusters on the **boundary between the
+  two ambient spaces' images** in the camera's view; kaarel's correction of
+  an earlier "grazing rays" reading: the truly *expensive* rays are the
+  limit-cycle ones sitting on that boundary — they are the unresolved
+  pixels. Whether that same set drives the flow-controller trouble is
+  plausible but unconfirmed. This reading explains the entry behavior
+  cleanly: the moment the camera crossed d=0 the chaos collapsed
+  (q90≈max≈median, flips 0, unresolved 0) because the two-image boundary
+  left the forward FOV — not because the interior is special. Consistently,
+  the side-2 look-back frame (flythrough demo frame 9), which points at that
+  boundary again, had 60 unresolved pixels.
 - Run artifacts: 839 frames (652 from the q90 run whose tail oversamples,
   187 from the resumed median run — resume is exact because the pre-entry
   camera state is closed-form in flat space), resampled to 314 at uniform

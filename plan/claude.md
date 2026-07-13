@@ -5,28 +5,41 @@ roadmap, and standing conventions. Dated session records live alongside as
 `plan/YYYY-MM-DD.md`. Last updated 2026-07-12. **This file is the resume
 point** — read it plus `jj log` before touching code.
 
-## Where we are (2026-07-12)
+## Where we are (2026-07-13)
 
-The POC pipeline is complete end-to-end: fitted YZ surface → blending → throat
-metric → christoffels → geodesics with chart/half/mouth transitions → BVH mouth
-entry → renderer with two-pass raymap output. First image lives in
-`gallery/first_light.png`; the trefoil knot renders end-to-end via
-`scripts/trefoil.jl` (heavily scrambled side-2 sky, as a knotted throat
-should). 209 tests green via `julia --project -e 'using Pkg; Pkg.test()'`,
-including reference-equivalence against the `Reference` submodule. The hot
-loop has been through three perf passes (7.5x; 3.1x from StaticArrays; 2x from
-the 2026-07-12 inference fix — knot-hitting ray now 2.8 ms, 384×288 trefoil
-10.1 s, and the tracer allocates ~0: 3 boxed sum-type returns per ray, the
-per-step loop is heap-free). Adaptive DP5(4) tracing exists but is opt-in
-(`RayBudget.tolerance` — see 2026-07-11 log for why fixed-step stays the
-render default).
+The POC pipeline is complete end-to-end and now includes cameras *in and
+through* the wormhole: fitted YZ surface → blending → throat metric →
+christoffels → geodesics with chart/half/mouth transitions → BVH mouth entry →
+two-pass raymap renderer → textured equirect skies → parallel-transported
+camera frames (reference + production, 0 B/step) → in-throat cameras
+(ambient/chart continuity certified) → piecewise-geodesic flight with
+mouth crossings → adaptive fly-through video (839 frames through the cube;
+temporal-sampling profile in measurements.md 2026-07-13). 275 tests green
+cold, physics_diff bit-stable all session. Perf state: knot-hitting ray
+~3.3-4.4 ms (collar single-pass −18%, 2026-07-12b), tracer allocates ~3-4
+boxed sum-type returns per ray, step loops heap-free. The honest
+constant-speed video (uniform Δτ=0.0037 → ~1670 frames) is deliberately
+deferred: CPU render cost is the binding constraint now — kaarel's cue to
+start GPU groundwork. Gallery: first_light, textured trefoil.
 
 ## Next candidates, kaarel picks the order
 
+- **GPU port groundwork** (kaarel, 2026-07-13, wrapping the fly-through
+  session): video rendering makes CPU cost the binding constraint (19 min
+  for the 187-frame median-controller stretch at 192×144; the honest
+  constant-speed cut ≈ 1670 frames was deferred for exactly this). Port
+  shape and pitfalls are in the perf roadmap's GPU bullet below — flatten
+  Dict-based half-edge/offset lookups, concretize Mouth, Float32 policy,
+  wavefront compaction; port the winning algorithm (likely tabulated Γ),
+  not necessarily the current loop.
 - **Silhouette tightening**: tessellation-only first-hit gives a polygonal
   wormhole outline (spurious rim misses). `Mouth` is an abstract interface
   ready for a second strategy (outward-offset tessellation, or a conservative
-  bound + Newton).
+  bound + Newton). Related but distinct (kaarel, 2026-07-13): the *expensive*
+  rays are limit-cycle rays on the boundary between the two ambient images —
+  the unresolved pixels — not grazing hits; that boundary is also where the
+  fly-through's chaotic shimmer lives (image-space aliasing → the ray-bundles
+  item).
 - ~~Textured sky~~ done 2026-07-12: `load_ppm` (P3/P6; `magick x.png x.ppm`
   for real images), `sample_equirect` (bilinear, azimuth-wrap), `TexturedSky`
   per-side callable; res/textures graticule test skies
