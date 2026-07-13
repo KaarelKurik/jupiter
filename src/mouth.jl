@@ -13,10 +13,10 @@ function half_throat(mouth::Mouth)
     mouth.half_throat
 end
 
-struct MouthTriangle # one tessellation triangle of a mouth, with its chart provenance
+struct MouthTriangle # one tessellation triangle of a mouth, with its chart provenance; isbits — the mesh lives on the mouth's half_throat
     corners::NTuple{3, SVector{3, Float64}} # ambient positions
-    sts::NTuple{3, SVector{2, Float64}} # square coords of the corners in face_handle's frame
-    face_handle::HalfEdgeHandle
+    sts::NTuple{3, SVector{2, Float64}} # square coords of the corners in face_he's frame
+    face_he::Int # face-inducing half-edge id
 end
 
 struct BVHNode
@@ -31,6 +31,7 @@ end
 struct BVH
     nodes::Vector{BVHNode} # root is the last node
     order::Vector{Int}
+    skip::Vector{Int} # threaded DFS: where traversal resumes after a node's subtree (0 = done)
 end
 
 function build_bvh(los, his, leaf_size=4)
@@ -54,7 +55,16 @@ function build_bvh(los, his, leaf_size=4)
         length(nodes)
     end
     build(1, length(order))
-    BVH(nodes, order)
+    # thread the right-first DFS: children precede parents in push order, so a
+    # reverse sweep sees each parent before assigning its children's skips
+    skip = zeros(Int, length(nodes))
+    for ix in length(nodes):-1:1
+        node = nodes[ix]
+        node.left == 0 && continue
+        skip[node.right] = node.left
+        skip[node.left] = skip[ix]
+    end
+    BVH(nodes, order, skip)
 end
 
 function slab_test(node::BVHNode, origin, inv_dir, t_bound)
@@ -92,8 +102,8 @@ function TessellatedMouth(env, half_throat::HalfThroat, samples_per_edge::Int)
         st(ij) = SVector(ij[1] / n, ij[2] / n)
         for j = 0:(n - 1), i = 0:(n - 1)
             a = (i, j); b = (i + 1, j); c = (i + 1, j + 1); d = (i, j + 1)
-            push!(triangles, MouthTriangle((at(a), at(b), at(c)), (st(a), st(b), st(c)), h))
-            push!(triangles, MouthTriangle((at(a), at(c), at(d)), (st(a), st(c), st(d)), h))
+            push!(triangles, MouthTriangle((at(a), at(b), at(c)), (st(a), st(b), st(c)), h.id))
+            push!(triangles, MouthTriangle((at(a), at(c), at(d)), (st(a), st(c), st(d)), h.id))
         end
     end
     TessellatedMouth(half_throat, triangles)
@@ -116,38 +126,43 @@ function ray_triangle_intersection(origin, dir, a, b, c) # Moeller-Trumbore; loo
     (t, u, v)
 end
 
+# threaded (stackless) traversal, the GPU-native shape: device recursion is a
+# wall, and per-thread traversal stacks are register/local-memory pressure —
+# on the CPU side both also fight the allocator (MArray setindex! defeats
+# escape analysis via pointer_from_objref; a wide NTuple stack exceeds vararg
+# specialization and boxes per push). Descending into the right child first
+# makes the visit sequence — and with it the best-hit evolution — identical
+# to the former recursive version (which processed right subtrees before
+# left). The running best stays the fixed-type (t, (u, v), triangle index;
+# 0 = no hit yet) — a `nothing`-seeded accumulator would re-trip the
+# self-call inference widening described at the dual-pass primitives (ad.jl).
 function nearest_mouth_hit(mouth::TessellatedMouth, origin, dir)
     origin = SVector{3, Float64}(origin)
     dir = SVector{3, Float64}(dir)
     inv_dir = map(d -> 1 / (d == 0 ? 1e-300 : d), dir) # dodge 0*Inf NaNs in the slab test
-    best_t, best_uv, best_ix = visit_bvh_node(mouth, length(mouth.bvh.nodes), origin, dir, inv_dir, Inf, (0.0, 0.0), 0)
+    nodes = mouth.bvh.nodes
+    best_t, best_uv, best_ix = Inf, (0.0, 0.0), 0
+    ix = length(nodes) # root is the last node
+    while ix != 0
+        node = nodes[ix]
+        if !slab_test(node, origin, inv_dir, best_t)
+            ix = mouth.bvh.skip[ix]
+        elseif node.left == 0
+            for k in node.first:(node.first + node.count - 1)
+                tri_ix = mouth.bvh.order[k]
+                hit = ray_triangle_intersection(origin, dir, mouth.triangles[tri_ix].corners...)
+                (hit === nothing || hit[1] >= best_t) && continue
+                best_t = hit[1]
+                best_uv = (hit[2], hit[3])
+                best_ix = tri_ix
+            end
+            ix = mouth.bvh.skip[ix]
+        else
+            ix = node.right
+        end
+    end
     best_ix == 0 && return nothing
     ((best_t, best_uv[1], best_uv[2]), mouth.triangles[best_ix])
-end
-
-# recursion instead of an explicit stack keeps traversal allocation-free. The
-# running best is threaded as (t, (u, v), triangle index; 0 = no hit yet) so
-# the recursive signature stays fixed — a Union-typed accumulator that starts
-# as `nothing` and becomes a tuple re-trips the same self-call inference
-# widening described at the dual-pass primitives (ad.jl). Right child first
-# reproduces the former explicit stack's pop order exactly.
-function visit_bvh_node(mouth::TessellatedMouth, ix, origin, dir, inv_dir, best_t, best_uv, best_ix)
-    node = mouth.bvh.nodes[ix]
-    slab_test(node, origin, inv_dir, best_t) || return (best_t, best_uv, best_ix)
-    if node.left == 0
-        for k in node.first:(node.first + node.count - 1)
-            tri_ix = mouth.bvh.order[k]
-            hit = ray_triangle_intersection(origin, dir, mouth.triangles[tri_ix].corners...)
-            (hit === nothing || hit[1] >= best_t) && continue
-            best_t = hit[1]
-            best_uv = (hit[2], hit[3])
-            best_ix = tri_ix
-        end
-    else
-        best_t, best_uv, best_ix = visit_bvh_node(mouth, node.right, origin, dir, inv_dir, best_t, best_uv, best_ix)
-        best_t, best_uv, best_ix = visit_bvh_node(mouth, node.left, origin, dir, inv_dir, best_t, best_uv, best_ix)
-    end
-    (best_t, best_uv, best_ix)
 end
 
 """
@@ -162,9 +177,10 @@ function mouth_entry(env, mouth::TessellatedMouth, origin, dir)
     best === nothing && return nothing
     (τ, bu, bv), tri = best
     pl = placement(mouth.half_throat)
-    chart = induced_chart(mouth.half_throat, vertex_index(tri.face_handle))
-    n = valence(tri.face_handle)
-    wedge = half_edge_offset(tri.face_handle)
+    h = HalfEdgeHandle(mesh(mouth.half_throat), tri.face_he)
+    chart = induced_chart(mouth.half_throat, vertex_index(h))
+    n = valence(h)
+    wedge = half_edge_offset(h)
     amb(st) = pl.linear * surface(env, chart, square_coords_to_chart(n, wedge, st)) + pl.translation
     bary = (1 - bu - bv) * tri.sts[1] + bu * tri.sts[2] + bv * tri.sts[3]
     x = SVector(bary[1], bary[2], τ)

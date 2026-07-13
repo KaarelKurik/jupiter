@@ -40,6 +40,20 @@ at the parent commit.
   (800 → 992 B for n=2). Bytes not boxes, per-passage not per-step; the
   device port carries only the flat tables. If it ever matters: a mutable
   Mesh (by-reference everywhere) or a slimmer hot handle.
+- **Step 2 (mouth concretization): two BVH stack representations died before
+  the threaded form.** Replacing the traversal recursion with an explicit
+  stack for device parity: (1) `MVector{64,Int}` heap-allocates 544 B per
+  entry attempt (~+1.6 kB/ray) — MArray `setindex!` goes through
+  `pointer_from_objref`, which defeats escape analysis; (2) an
+  `NTuple{64,Int}` stack via `Base.setindex` explodes to 330–500 kB/ray —
+  the 66-argument `_setindex` splat exceeds vararg specialization and every
+  push boxes the whole tuple (also ~+3% time). Resolution: **threaded BVH**
+  (skip-pointer DFS, one extra Int per node computed in a reverse sweep at
+  build) — no stack at all, allocation exactly back to the step-1 floor,
+  timing unchanged, and it's the GPU-native shape (no local-memory stack).
+  Right-child-first descent preserves the recursive visit order, so best-hit
+  evolution is bit-identical: physics_diff again 1.34e-14/1.84e-10, 0 flips,
+  275/275 cold.
 
 ## 2026-07-13 — temporal sampling for fly-through video: the flow-rate profile, and two ways a flow controller can die
 
