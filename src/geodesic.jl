@@ -244,8 +244,16 @@ end
 """
 ray emission from a camera inside the throat: camera = chart point + frame
 (columns right, up, forward — any basis, like Camera); x, y in [-1, 1] pick
-the pixel direction, and the result is ready for trace_geodesic
+the pixel direction, and the result is ready for trace_geodesic. Deliberately
+NOT normalized: the raw frame scale gives step budgets "computational effort"
+semantics (and shows holonomy rescale honestly); pipe through metric_normalize
+for geometry-pegged budgets, which is what rendering wants.
 """
 function emit_ray(chart, pos, frame, tan_half_fov, x, y)
     SituatedPhase(chart, pos, frame * SVector(x * tan_half_fov, y * tan_half_fov, 1.0))
+end
+
+function metric_normalize(env, v::SituatedPhase) # unit metric speed: g(vel, vel) = 1
+    g = metric(env, v.chart, v.pos)
+    SituatedPhase(v.chart, v.pos, v.vel / sqrt(v.vel' * g * v.vel))
 end

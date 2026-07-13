@@ -151,10 +151,11 @@ function visit_bvh_node(mouth::TessellatedMouth, ix, origin, dir, inv_dir, best_
 end
 
 """
-ambient ray -> the SituatedPhase entering this mouth at d = 0, or nothing on a
-miss; origin and dir live in the ambient space of the half_throat's placement
+shared entry solve: BVH hit + Newton against the exact surface; returns
+(chart, d = 0 position, ambient collar differential at it, ray parameter of
+the entry point) or nothing on a miss
 """
-function enter_mouth(env, mouth::TessellatedMouth, origin, dir)
+function mouth_entry(env, mouth::TessellatedMouth, origin, dir)
     origin = SVector{3, Float64}(origin)
     dir = SVector{3, Float64}(dir)
     best = nearest_mouth_hit(mouth, origin, dir)
@@ -177,6 +178,31 @@ function enter_mouth(env, mouth::TessellatedMouth, origin, dir)
     w = square_coords_to_chart(n, wedge, SVector(x[1], x[2]))
     pos = SVector(w[1], w[2], 0.0)
     cl = p -> pl.linear * collar(env, chart, p) + pl.translation
-    collar_jac = jacobian_columns(cl, pos, Val(3))
-    settle_phase(env, SituatedPhase(chart, pos, collar_jac \ dir))
+    (chart, pos, jacobian_columns(cl, pos, Val(3)), x[3])
+end
+
+"""
+ambient ray -> the SituatedPhase entering this mouth at d = 0, or nothing on a
+miss; origin and dir live in the ambient space of the half_throat's placement
+"""
+function enter_mouth(env, mouth::TessellatedMouth, origin, dir)
+    entry = mouth_entry(env, mouth, origin, dir)
+    entry === nothing && return nothing
+    chart, pos, collar_jac, _ = entry
+    settle_phase(env, SituatedPhase(chart, pos, collar_jac \ SVector{3, Float64}(dir)))
+end
+
+"""
+enter carrying a frame: the frame's columns pull back through the collar
+differential — the exact inverse of to_ambient's export, so cross-and-return
+is identity. Returns (settled phase, chart frame, entry ray parameter) or
+nothing on a miss; the parameter is in units of vel, for path bookkeeping.
+"""
+function enter_transport(env, mouth::TessellatedMouth, origin, vel, E::SMatrix{3, N}) where {N}
+    entry = mouth_entry(env, mouth, origin, vel)
+    entry === nothing && return nothing
+    chart, pos, collar_jac, τ = entry
+    v, E2 = settle_transport(env, SituatedPhase(chart, pos, collar_jac \ SVector{3, Float64}(vel)),
+                             hcat(ntuple(col -> collar_jac \ E[:, col], Val(N))...))
+    (v, E2, τ)
 end

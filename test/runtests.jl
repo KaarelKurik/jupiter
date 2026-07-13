@@ -435,6 +435,61 @@ end
                        J.metric(nothing, c, pe)) < 1e-12
 end
 
+@testset "camera inside the throat" begin
+    budget = J.RayBudget(0.05, 400, 4)
+    mouth2 = J.TessellatedMouth(nothing, J.HalfThroat(th, 2), 8)
+    scene = J.Scene(th, (mouth, mouth2), J.checker_sky)
+    Es = J.SMatrix{3, 3, Float64}([1.0 0.2 0.5; 0.0 1.1 0.2; 0.3 0.0 0.9])
+
+    # frame entry inverts frame exit: export a frame through the mouth, walk two
+    # vel-lengths out, re-enter — phase, frame, and entry parameter all recover
+    pos0 = [0.1, 0.05, 0.0]
+    vel0 = [0.02, 0.01, 0.6]
+    rr, A = J.to_ambient(nothing, J.SituatedPhase(c, pos0, -vel0), Es)
+    got = J.enter_transport(nothing, mouth, rr.pos + 2 * rr.vel, -rr.vel, A)
+    @test got !== nothing
+    vin, Ein, τ = got
+    @test abs(τ - 2) < 1e-9
+    @test maximum(abs, vin.pos - pos0) < 1e-9
+    @test maximum(abs, vin.vel - vel0) < 1e-9
+    @test maximum(abs, Ein - Es) < 1e-9
+
+    # metric_normalize: unit g-speed, direction preserved
+    vn = J.metric_normalize(nothing, J.SituatedPhase(c, [0.2, 0.15, 0.25], [0.1, 0.2, 0.3]))
+    @test abs(vn.vel' * J.metric(nothing, vn.chart, vn.pos) * vn.vel - 1) < 1e-12
+    @test abs(J.generic_normalize(vn.vel)' * J.generic_normalize([0.1, 0.2, 0.3]) - 1) < 1e-12
+
+    # render from inside: forward-looking camera in the throat resolves and
+    # (looking inward) exits to the far side
+    camC0 = J.SituatedCamera(c, J.SVector(0.2, 0.15, 0.3), J.SMatrix{3, 3, Float64}([1.0 0 0; 0 1 0; 0 0 1]), tan(pi / 6))
+    rm0 = J.render_raymap(nothing, scene, budget, camC0, 8, 6)
+    @test count(==(2), rm0.side) >= (8 * 6) ÷ 2
+    @test all(isfinite, rm0.vel)
+
+    # continuity certification: the same physical camera, described as an
+    # ambient Camera outside the mouth and as a SituatedCamera at collar depth
+    # -δ, renders the same raymap (sides exactly, exit rays to integrator level)
+    uvc = [0.1, 0.05]
+    rout = J.to_ambient(nothing, J.SituatedPhase(c, [uvc; 0.0], [0.0, 0.0, -1.0]))
+    δ = 0.05
+    n = rout.vel # unit outward normal (collar isometry)
+    campos = rout.pos + δ * n
+    right = J.generic_normalize(cross(-n, [0.0, 0.0, 1.0]))
+    Fa = [right cross(right, -n) -n]
+    camA = J.Camera(campos, J.SMatrix{3, 3, Float64}(Fa), tan(pi / 8))
+    rmA = J.render_raymap(nothing, scene, budget, camA, 1, 6, 4)
+    cpos = J.SVector(uvc[1], uvc[2], -δ) # the identical point, in collar coordinates
+    cjac = J.jacobian_columns(p -> J.collar(nothing, c, p), cpos, Val(3))
+    Fc = reduce(hcat, [cjac \ J.SVector{3, Float64}(Fa[:, col]) for col in 1:3])
+    camC = J.SituatedCamera(c, cpos, J.SMatrix{3, 3, Float64}(Fc), tan(pi / 8))
+    rmC = J.render_raymap(nothing, scene, budget, camC, 6, 4)
+    @test rmA.side == rmC.side
+    resolved = [rmA.side[i, j] != 0 for i in 1:6, j in 1:4]
+    veldiff = maximum(maximum(abs, rmA.vel[:, i, j] - rmC.vel[:, i, j])
+                      for i in 1:6, j in 1:4 if resolved[i, j])
+    @test veldiff < 1e-4
+end
+
 @testset "camera transport (reference)" begin
     R = J.Reference
     gram(v, E) = E' * J.metric(nothing, v.chart, v.pos) * E

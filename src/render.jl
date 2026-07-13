@@ -47,6 +47,18 @@ function trace_ray(env, scene, budget, ray::AmbientRay)
 end
 
 """
+trace_ray for a ray that starts inside the throat: the initial segment runs on
+the step budget, and once it escapes, re-entries get the usual passage loop
+"""
+function trace_ray(env, scene, budget, v::SituatedPhase)
+    res = budget.tolerance > 0 ?
+          trace_geodesic(env, v, budget.step_size, budget.max_steps, budget.tolerance) :
+          trace_geodesic(env, v, budget.step_size, budget.max_steps)
+    res isa SituatedPhase && return nothing # out of steps inside the throat
+    trace_ray(env, scene, budget, res)
+end
+
+"""
 pinhole camera: a point plus a frame (columns: right, up, forward). The frame
 is any basis, NOT necessarily orthonormal — orthonormality is merely
 look_at_camera's choice of initial condition. Transporting a camera through
@@ -74,10 +86,29 @@ function camera_ray(camera::Camera, half_throat::HalfThroat, x, y) # x, y in [-1
     AmbientRay(half_throat, camera.pos, dir)
 end
 
-function pixel_ray(camera::Camera, half_throat::HalfThroat, i, j, width, height) # pixel centers, row 1 at the top
-    x = (2 * (i - 0.5) / width - 1) * (width / height)
-    y = 1 - 2 * (j - 0.5) / height
+pixel_ndc(i, j, width, height) = # pixel centers, row 1 at the top, x aspect-scaled
+    ((2 * (i - 0.5) / width - 1) * (width / height), 1 - 2 * (j - 0.5) / height)
+
+function pixel_ray(camera::Camera, half_throat::HalfThroat, i, j, width, height)
+    x, y = pixel_ndc(i, j, width, height)
     camera_ray(camera, half_throat, x, y)
+end
+
+"""
+pinhole camera inside the throat: chart point + frame (columns right, up,
+forward — any basis, same contract as Camera). Emitted rays are
+metric-normalized so the ray budget means the same thing for every pixel
+regardless of the frame's holonomy scale.
+"""
+struct SituatedCamera{P, F}
+    chart::Chart
+    pos::P
+    frame::F
+    tan_half_fov::Float64
+end
+
+function camera_ray(env, camera::SituatedCamera, x, y)
+    metric_normalize(env, emit_ray(camera.chart, camera.pos, camera.frame, camera.tan_half_fov, x, y))
 end
 
 function checker_sky(side, dir)
@@ -107,6 +138,25 @@ function render_raymap(env, scene, budget, camera::Camera, cam_side::Int, width:
     Threads.@threads for j in 1:height
         for i in 1:width
             out = trace_ray(env, scene, budget, pixel_ray(camera, cam_space, i, j, width, height))
+            out === nothing && continue
+            raymap.side[i, j] = side(half_throat(out))
+            raymap.pos[:, i, j] = out.pos
+            raymap.vel[:, i, j] = out.vel
+        end
+    end
+    raymap
+end
+
+"""
+the expensive pass from inside the throat: same contract as render_raymap for
+an ambient Camera, but every ray starts as an emitted SituatedPhase
+"""
+function render_raymap(env, scene, budget, camera::SituatedCamera, width::Int, height::Int)
+    raymap = RayMap(zeros(Int, width, height), zeros(3, width, height), zeros(3, width, height))
+    Threads.@threads for j in 1:height
+        for i in 1:width
+            x, y = pixel_ndc(i, j, width, height)
+            out = trace_ray(env, scene, budget, camera_ray(env, camera, x, y))
             out === nothing && continue
             raymap.side[i, j] = side(half_throat(out))
             raymap.pos[:, i, j] = out.pos
