@@ -4,6 +4,50 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-13 — temporal sampling for fly-through video: the flow-rate profile, and two ways a flow controller can die
+
+**Motivation.** How densely to sample a fly-through in the flight parameter τ,
+for both a perceptually-smooth adaptive video and an honest constant-speed one.
+
+**Method.** Optical flow measured directly: sparse probe raymaps (16×12 rays)
+before/after each candidate step; per-pixel angular change of exit directions
+(same-side pixels), expressed in render pixels (192-wide, fov π/3.2 →
+0.29°/px); side-flip fraction as a second signal. Adaptive controller in the
+DP5 accept/reject shape, growth factor 0.85·target/flow. Cube scene, textured
+skies, camera straight through the throat, τ 0→6.5. scripts/flyvideo.jl.
+
+**Findings.**
+
+- **Flow-rate profile** (px of bulk feature motion per unit τ, 3px/frame
+  target → Δτ = 3/rate): far approach ~195; final exterior approach (τ
+  1.5–2.0, mouth filling the view) ~610 median, 805 peak — the global worst;
+  entry zone ~480; throat interior 115–160; departure ~0 (no parallax against
+  the far sky — Δτ immediately maxes out; the whole exit took 7 frames).
+  **Constant-speed answer: uniform Δτ = target/peak = 0.0037 for 3 px.**
+- **Controller death #1 — max statistic.** Near-critical-ring pixels' exit
+  directions change ~2.5px+ for ANY camera displacement (chaotic
+  sensitivity, does not scale with Δτ). Steering on max flow pinned Δτ at
+  ~0.002 from the very start, 100x oversampling.
+- **Controller death #2 — any fixed upper quantile.** q90 worked until the
+  mouth filled >10% of the probe with near-critical pixels (τ≈1.4+), then
+  pinned exactly like max (2.5px at Δτ=0.0008; measured max there up to
+  319px) and the un-floored growth formula ground to a halt: 630 frames to
+  reach τ=1.77. Fix: steer on the **median** + a hard Δτ floor (0.004);
+  q90/max stay in the log as an audit of the chaotic population.
+- **Chaotic shimmer is image-space aliasing, not temporal undersampling** —
+  no frame density smooths it (it needs ray bundles / supersampling, see
+  roadmap). The moment the camera crossed d=0 the chaos collapsed
+  (q90≈max≈median, flips 0, unresolved 0): the shimmer population is
+  exterior grazing sightlines across the critical ring; the interior view is
+  coherently lensed and cheap to sample.
+- Run artifacts: 839 frames (652 from the q90 run whose tail oversamples,
+  187 from the resumed median run — resume is exact because the pre-entry
+  camera state is closed-form in flat space), resampled to 314 at uniform
+  3px perceptual speed (scratch script; rate profile from the logs), videos
+  in out/flythrough_adaptive{,_raw}.mp4, logs preserved as
+  out/flyvideo_run{1,2}.log. Render cost ~19min for the median-run portion
+  at 192×144.
+
 ## 2026-07-12 — jacobian_columns twin retired: the inner pass is honestly a different operation, and fusing it makes rays ~18% faster
 
 **Motivation.** The `nested_jacobian_columns` twin (below) worked but smelled
