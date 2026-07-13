@@ -236,4 +236,94 @@ function trace_geodesic(env, v::SituatedPhase, h0, max_attempts, tol)
     v
 end
 
+# ---- camera transport: parallel transport of a frame along a geodesic ----
+#
+# A camera is a point plus an arbitrary frame (columns of E). Transport is
+# connection transport, not metric transport: with non-isometric placements
+# there is no global metric, so a frame returning from a loop may come back
+# rescaled or sheared — and should. Locally, though, the connection is
+# metric-compatible: the Gram matrix E' g E is invariant along the transport,
+# which is what the tests pin down.
+
+"""
+right-hand sides for jointly integrating a phase and a frame parallel along
+it; E is a matrix of tangent-vector columns, dE^k_c = -Γ^k_ij v^i E^j_c
+(the velocity obeys the same law with E = v — that is what geodesic means)
+"""
+function transport_flow(env, v::SituatedPhase, E)
+    Γ = christoffel(env, v)
+    dE = [-sum(v.vel[i] * E[j, col] * Γ[k, i, j] for i in 1:3, j in 1:3)
+          for k in 1:3, col in 1:size(E, 2)]
+    (v.vel, wvel_along_v(env, v, v), dE)
+end
+
+function transport_step(env, v::SituatedPhase, E, h) # one RK4 step of (pos, vel, frame), staying in v's chart
+    stage(k, s) = (SituatedPhase(v.chart, v.pos + s * k[1], v.vel + s * k[2]), E + s * k[3])
+    k1 = transport_flow(env, v, E)
+    k2 = transport_flow(env, stage(k1, h / 2)...)
+    k3 = transport_flow(env, stage(k2, h / 2)...)
+    k4 = transport_flow(env, stage(k3, h)...)
+    d = map((a, b, c, e) -> (a + 2b + 2c + e) / 6, k1, k2, k3, k4)
+    (SituatedPhase(v.chart, v.pos + h * d[1], v.vel + h * d[2]), E + h * d[3])
+end
+
+"""
+apply a phase transition f to every column of a frame at v: transitions act on
+tangent vectors by their differential, i.e. exactly as they act on velocities
+"""
+function map_frame(v::SituatedPhase, E, f)
+    reduce(hcat, [f(SituatedPhase(v.chart, v.pos, E[:, col])).vel for col in 1:size(E, 2)])
+end
+
+function chart_transition(v::SituatedPhase, E, target_offset)
+    (chart_transition(v, target_offset), map_frame(v, E, w -> chart_transition(w, target_offset)))
+end
+
+function half_transition(v::SituatedPhase, E)
+    (half_transition(v), map_frame(v, E, half_transition))
+end
+
+function settle_transport(env, v::SituatedPhase, E, max_hops=8) # settle_phase with the frame riding along
+    for _ in 1:max_hops
+        if v.pos[3] > params(half_throat(v.chart)).transition_depth
+            v, E = half_transition(v, E)
+            continue
+        end
+        n = valence(v.chart)
+        k = wedge_index(n, v.pos)
+        st = wedge_square_coords(n, k, v.pos)
+        maximum(st) <= 0.5 && return (v, E)
+        v, E = chart_transition(v, E, st[1] >= st[2] ? k : Int(mod(k + 1, n)))
+    end
+    (v, E)
+end
+
+function to_ambient(env, v::SituatedPhase, E) # frame columns out via the collar differential, like the velocity
+    cl = p -> collar(env, v.chart, p)
+    pl = placement(half_throat(v.chart))
+    (to_ambient(env, v),
+     reduce(hcat, [pl.linear * directional(cl, v.pos, E[:, col]) for col in 1:size(E, 2)]))
+end
+
+"""
+trace a geodesic while parallel-transporting the frame E along it; returns
+(AmbientRay, ambient frame) on mouth exit, (SituatedPhase, E) when out of steps
+"""
+function trace_transport(env, v::SituatedPhase, E, h, max_steps)
+    for _ in 1:max_steps
+        v, E = settle_transport(env, transport_step(env, v, E, h)...)
+        exits_mouth(v) && return to_ambient(env, v, E)
+    end
+    (v, E)
+end
+
+"""
+ray emission from a camera inside the throat: camera = chart point + frame
+(columns right, up, forward — any basis, like render.jl's Camera); x, y in
+[-1, 1] pick the pixel direction, and the result is ready for trace_geodesic
+"""
+function emit_ray(chart, pos, frame, tan_half_fov, x, y)
+    SituatedPhase(chart, pos, frame * [x * tan_half_fov, y * tan_half_fov, 1.0])
+end
+
 end

@@ -410,4 +410,57 @@ end
                        J.metric(nothing, c, pe)) < 1e-12
 end
 
+@testset "camera transport (reference)" begin
+    R = J.Reference
+    gram(v, E) = E' * J.metric(nothing, v.chart, v.pos) * E
+    E0 = [1.0 0.2 0.5; 0.0 1.1 0.2; 0.3 0.0 0.9] # deliberately non-orthonormal
+
+    # transport along a lateral trace with chart hops: the velocity column obeys
+    # the same law as the integrated velocity, and the Gram matrix is invariant
+    # (metric compatibility survives the hops — tensoriality in action)
+    v0 = R.settle_phase(nothing, J.SituatedPhase(c, [0.3, 0.02, 0.25], [0.5, 0.2, 0.1]))
+    v, E = v0, [v0.vel E0]
+    G0 = gram(v0, E)
+    hopped = false
+    for _ in 1:200
+        v, E = R.settle_transport(nothing, R.transport_step(nothing, v, E, 0.01)...)
+        hopped |= J.vertex_index(v.chart) != J.vertex_index(v0.chart)
+    end
+    @test hopped
+    @test maximum(abs, E[:, 1] - v.vel) < 1e-10
+    @test maximum(abs, gram(v, E) - G0) < 1e-6
+
+    # transitions alone are exact: half handover is an involution on frames
+    vd = J.SituatedPhase(c, [0.2, 0.15, 0.7], [0.1, 0.05, 0.5])
+    vh, Eh = R.half_transition(vd, E0)
+    vhh, Ehh = R.half_transition(vh, Eh)
+    @test maximum(abs, Ehh - E0) == 0
+
+    # transport is reversible: 20 steps out, flip the velocity, 20 steps back
+    vb, Eb = v0, copy(E0)
+    for _ in 1:20
+        vb, Eb = R.settle_transport(nothing, R.transport_step(nothing, vb, Eb, 0.01)...)
+    end
+    vr, Er = J.SituatedPhase(vb.chart, vb.pos, -vb.vel), Eb
+    for _ in 1:20
+        vr, Er = R.settle_transport(nothing, R.transport_step(nothing, vr, Er, 0.01)...)
+    end
+    @test J.vertex_index(vr.chart) == J.vertex_index(v0.chart)
+    @test maximum(abs, Er - E0) < 1e-9
+
+    # out through the mouth: the collar differential is isometric, so ambient
+    # dot products of the exported frame match the conserved Gram matrix
+    vout = J.SituatedPhase(c, [0.2, 0.15, 0.2], [0.05, 0.05, -0.6])
+    r, A = R.trace_transport(nothing, vout, E0, 0.01, 200)
+    @test r isa J.AmbientRay
+    @test maximum(abs, A' * A - gram(vout, E0)) < 1e-6
+
+    # emission from inside: frame-basis pixel ray, traced through to the far sky
+    ph = R.emit_ray(c, [0.2, 0.15, 0.01], [1.0 0 0; 0 1 0; 0 0 1], tan(pi / 8), 0.1, -0.2)
+    @test ph.vel ≈ [0.1 * tan(pi / 8), -0.2 * tan(pi / 8), 1.0]
+    r2 = R.trace_geodesic(nothing, ph, 0.02, 400)
+    @test r2 isa J.AmbientRay
+    @test J.side(J.half_throat(r2)) == 2
+end
+
 end

@@ -27,14 +27,22 @@ render default).
   wormhole outline (spurious rim misses). `Mouth` is an abstract interface
   ready for a second strategy (outward-offset tessellation, or a conservative
   bound + Newton).
-- **Textured sky** from an image file (raymap makes iterating on this ~0.6s).
+- ~~Textured sky~~ done 2026-07-12: `load_ppm` (P3/P6; `magick x.png x.ppm`
+  for real images), `sample_equirect` (bilinear, azimuth-wrap), `TexturedSky`
+  per-side callable; res/textures graticule test skies
+  (scripts/make_test_skies.jl regenerates), scripts/textured.jl re-shades a
+  raymap (~0.2s at 384×288).
 - **David mesh path**: res/models/*.stl are triangles; fit_geometry assumes
   quads, so one CC pre-subdivision or a quad remesh comes first; also STL
   loading. (`scripts/david.jl` scaffolding is in kaarel's working copy.)
-- **Camera transport / fly-through**: camera = point + arbitrary frame (NOT
-  necessarily orthonormal — no global metric with non-isometric placements;
-  loop holonomy may rescale/shear, and should). Needs a parallel-transport
-  companion to geodesic_step; ray emission from inside via SituatedPhase.
+- **Camera transport / fly-through**: reference impl done 2026-07-12
+  (reference.jl: transport_flow/transport_step joint RK4, map_frame riding
+  transitions, settle_transport, trace_transport, emit_ray; invariants
+  tested — Gram matrix conserved through hops/handover, reversible, collar
+  isometry at exit). Remaining: production port + fly-through rendering.
+  Camera = point + arbitrary frame (NOT necessarily orthonormal — no global
+  metric with non-isometric placements; loop holonomy may rescale/shear, and
+  should).
 - **Perf**: see roadmap below. Ground truth for aggressive optimization
   (kaarel's requirement): deliberate semantic changes go to `src/reference.jl`
   first, then production follows; run `scripts/physics_diff.jl` around any
