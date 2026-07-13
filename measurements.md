@@ -4,6 +4,42 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-13c — de-pinning hash iteration order from mesh construction: the slack is ~1e-13/e-10, within budget
+
+**Motivation.** Step 1 below froze Dict hash-iteration order as implicit
+semantics (the CC rebuild helpers reconstructed the historical insertion
+sequence so refined-mesh numbering stayed bit-identical). Kaarel's call:
+incidental hash order must not be pinned — allow the slack downstream and
+let construction be canonical instead.
+
+**Method.** Pre/post pointwise comparison of fitted surfaces
+(`sample_surface` grids are anchored at original-mesh face handles, whose
+numbering never changes, so points pair up across the change regardless of
+gauge); physics_diff against the *old* baselines before re-saving; knot-ray
+timing/alloc probe.
+
+**Findings.**
+
+- What the order actually fed: refined-mesh vertex/face *numbering* (pure
+  labels), FP summation order in the CC vertex means, and each vertex's
+  canonical frame = first neighbor (a gauge choice — rotates chart
+  coordinates, not the embedded surface). Nothing semantic. Construction is
+  now deterministic without hash order: encounter-order neighbor lists,
+  first-encounter edge enumeration, face-slot refined-face numbering; the
+  HalfEdge struct, the half_edges Dict builder, and both order-freezing CC
+  rebuild helpers are deleted. The one remaining construction Dict is
+  lookup-only (order never observed).
+- **Fitted surfaces moved 1.6e-14 (cube) / 5.8e-15 (trefoil) pointwise** —
+  pure arithmetic reordering, geometry intact.
+- **physics_diff passed against the old baselines**: 0 side flips, worst
+  deviations 8.2e-13 cube / 2.7e-10 trefoil (vs 1.34e-14 / 1.84e-10
+  previously certified; 1e-9 budget). Baselines re-saved to restore
+  headroom (deliberate change; the 1 unresolved trefoil ray was unresolved
+  before too). 275/275 cold; knot-ray timing and allocation flat.
+- Side benefit: physics_diff's claim that baselines survive Julia version
+  changes is now actually true of the construction path — hash order was
+  the remaining version dependence.
+
 ## 2026-07-13b — half-edge flattening (GPU groundwork step 1): Dicts weren't a measurable CPU cost; immutable-Mesh inlining grows the passage boxes
 
 **Motivation.** GPU port step 1: replace Mesh's name-keyed Dicts

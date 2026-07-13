@@ -1,13 +1,9 @@
 # convention: vertex induced neighbor is the first in its neighbor list
 
-struct HalfEdge # construction-time transient; the runtime representation is the flat tables on Mesh
-    vertices::NTuple{4, Int}
-    face_index::Int
-end
-
 # both vertices and faces consecutively 1-indexed. Connectivity the hot loop
-# touches is flat, id-indexed arrays (GPU-shaped); name-keyed Dicts appear only
-# transiently during construction and in the CC rebuild helpers below.
+# touches is flat, id-indexed arrays (GPU-shaped); the one construction-time
+# Dict is lookup-only, so no hash iteration order is ever observed — all
+# numbering and canonical-frame choices are deterministic by construction.
 # Half-edge id order: faces in order, slots ccw within each face.
 struct Mesh
     vertices::Vector{Vector{Float64}}
@@ -37,29 +33,20 @@ function mean(x)
 end
 
 
+# encounter order, not a Set collect: the first entry becomes the vertex's
+# canonical frame, and that gauge choice must be deterministic by
+# construction, not an artifact of hash iteration
 function vertex_neighbors(faces::Vector{Vector{Int}}, vertex_total)
-    neighbors::Vector{Set{Int}} = [Set{Int}() for i = 1:vertex_total]
+    neighbors::Vector{Vector{Int}} = [Int[] for i = 1:vertex_total]
     for f in faces
         for i = 1:length(f)
             cv = f[i]
             nv = f[rotoindex(1,length(f),i+1)]
-            push!(neighbors[cv], nv)
-            push!(neighbors[nv], cv)
+            nv in neighbors[cv] || push!(neighbors[cv], nv)
+            cv in neighbors[nv] || push!(neighbors[nv], cv)
         end
     end
-    [collect(ns) for ns in neighbors]
-end
-
-function half_edges(faces::Vector{Vector{Int}})
-    out = Dict{NTuple{2,Int}, HalfEdge}()
-    for (faceix,f) in enumerate(faces)
-        for i = 1:length(f)
-            vertices = ntuple(ix -> f[rotoindex(1,length(f), ix + i - 1)], 4)
-            he = HalfEdge(vertices, faceix)
-            out[vertices[2:3]] = he
-        end
-    end
-    out
+    neighbors
 end
 
 function next(h::HalfEdgeHandle)
@@ -195,26 +182,16 @@ function load_obj(path) # MeshIO triangulates on load; YZ fitting needs the quad
     Mesh(vertices, faces)
 end
 
-function edges(m::Mesh)
-    out = Set()
+function edges(m::Mesh) # sorted vertex pairs, in first-encounter order over faces
+    seen = Set{NTuple{2, Int}}() # membership only, order never observed
+    out = NTuple{2, Int}[]
     for face in m.faces
         for j in 1:length(face)
-            half_edge = (face[j], face[(j%length(face))+1])
-            push!(out, sort(half_edge))
+            e = sort((face[j], face[(j%length(face))+1]))
+            e in seen || (push!(seen, e); push!(out, e))
         end
     end
     out
-end
-
-# rebuilt via half_edges(m.faces) with the historical insertion sequence, so
-# the Dict's iteration order — which catmullclark's face numbering inherits
-# through collect — is unchanged (bit-identity of fitted meshes)
-function half_edge_name_to_face_index(m::Mesh)
-    Dict(name => he.face_index for (name,he) in half_edges(m.faces))
-end
-
-function half_edge_name_to_next_name(m::Mesh)
-    Dict(name => he.vertices[3:4] for (name,he) in half_edges(m.faces))
 end
 
 function vertex_to_vertices(m::Mesh)

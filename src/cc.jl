@@ -8,18 +8,14 @@ function catmullclark(m::Mesh) # returns a new mesh, assumes closed input
         verts = m.vertices[face]
         mean(verts)
     end
-    mesh_edges = edges(m)
-    he_to_face = half_edge_name_to_face_index(m)
-    edge_vertices = Dict(
-        begin
-            a,b = edge
-            fa = he_to_face[(a,b)]
-            fb = he_to_face[(b,a)]
-            points = [face_vertices[fa], face_vertices[fb], m.vertices[a], m.vertices[b]]
-            edge => mean(points)
-        end
-        for edge in mesh_edges
-    )
+    mesh_edges = edges(m) # first-encounter order fixes edge-vertex numbering
+    he_to_face = Dict{NTuple{2, Int}, Int}((f[i], f[rotoindex(1, length(f), i+1)]) => ix
+                                           for (ix, f) in pairs(m.faces) for i in 1:length(f)) # lookup only
+    edge_vertices = map(mesh_edges) do (a, b)
+        fa = he_to_face[(a,b)]
+        fb = he_to_face[(b,a)]
+        mean([face_vertices[fa], face_vertices[fb], m.vertices[a], m.vertices[b]])
+    end
     v_to_faces = vertex_to_faces(m)
     v_to_vertices = vertex_to_vertices(m)
     v_vertices = map(enumerate(m.vertices)) do (ix,v)
@@ -31,24 +27,24 @@ function catmullclark(m::Mesh) # returns a new mesh, assumes closed input
         ((n-3)*v + 2*edge_average + face_average)/n
     end
 
-    fixed_ev_pairs = collect(edge_vertices)
-    all_vertices = [face_vertices ; map(x -> x[2], fixed_ev_pairs) ; v_vertices]
-    block_lengths = [length(face_vertices), length(fixed_ev_pairs), length(v_vertices)]
+    all_vertices = [face_vertices ; edge_vertices ; v_vertices]
+    block_lengths = [length(face_vertices), length(edge_vertices), length(v_vertices)]
     block_ends = accumulate(+, block_lengths)
     face_vixes = [i for i in 1:block_ends[1]]
-    edge_vixes = Dict(zip(map(x -> x[1], fixed_ev_pairs), (block_ends[1]+1):block_ends[2]))
+    edge_vixes = Dict(zip(mesh_edges, (block_ends[1]+1):block_ends[2]))
     v_vixes = [i for i in (block_ends[2]+1):block_ends[3]]
 
     old_v_to_new_v = v_vixes
-    he_to_next = half_edge_name_to_next_name(m)
 
-    new_faces = map(collect(he_to_face)) do (he,f)
-        nhe = he_to_next[he]
-        edge = sort(he)
-        nedge = sort(nhe)
-        point_indices = [face_vixes[f], edge_vixes[edge], v_vixes[he[2]], edge_vixes[nedge]]
-        point_indices
-    end
+    # one refined face per half-edge, in face-slot order — numbering is
+    # deterministic by construction, not inherited from a Dict collect
+    new_faces = [
+        begin
+            a, b, c = f[i], f[rotoindex(1, length(f), i+1)], f[rotoindex(1, length(f), i+2)]
+            [face_vixes[ix], edge_vixes[sort((a, b))], v_vixes[b], edge_vixes[sort((b, c))]]
+        end
+        for (ix, f) in pairs(m.faces) for i in 1:length(f)
+    ]
 
     # for every half-edge in the original,
     # produce a half-edge in the new that is a shortening of the original,
