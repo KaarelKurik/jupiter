@@ -17,6 +17,7 @@ include("geodesic.jl")
 include("mouth.jl")
 include("fit.jl")
 include("render.jl")
+include("flight.jl")
 include("reference.jl")
 
 export Mesh

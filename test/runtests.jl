@@ -490,6 +490,54 @@ end
     @test veldiff < 1e-4
 end
 
+@testset "flight" begin
+    budget = J.RayBudget(0.05, 400, 4)
+    mouth2 = J.TessellatedMouth(nothing, J.HalfThroat(th, 2), 8)
+    scene = J.Scene(th, (mouth, mouth2), J.checker_sky)
+
+    campos = J.SVector(0.9, -2.8, 0.9)
+    fwd = J.generic_normalize(-campos)
+    right = J.generic_normalize(cross(fwd, [0.0, 0.0, 1.0]))
+    F0 = J.SMatrix{3, 3, Float64}([right cross(right, fwd) fwd])
+    cam0 = J.FlyingCamera(J.AmbientRay(J.HalfThroat(th, 1), campos, fwd), F0)
+
+    # steer and maneuver are frame-relative and exact
+    @test J.steer(cam0, [0.0, 0.0, 2.0]).state.vel ≈ 2 * F0[:, 3]
+    yaw180 = J.SMatrix{3, 3, Float64}([-1 0 0; 0 1 0; 0 0 -1])
+    @test J.maneuver(cam0, yaw180).frame == F0 * yaw180
+
+    # a full crossing: ambient -> inside -> ambient on the far side, with the
+    # frame's flat Gram matrix recovered (transport + both seam maps isometric)
+    cam = J.coast(nothing, scene, cam0, 2.5, 0.02)
+    @test cam.state isa J.SituatedPhase
+    crossed = cam
+    for _ in 1:5
+        crossed.state isa J.AmbientRay && break
+        crossed = J.coast(nothing, scene, crossed, 2.0, 0.02)
+    end
+    @test crossed.state isa J.AmbientRay
+    @test J.side(J.half_throat(crossed.state)) == 2
+    @test maximum(abs, crossed.frame' * crossed.frame - F0' * F0) < 1e-6
+    # forward-looking stays forward-looking: motion is the transported 3rd axis
+    @test maximum(abs, crossed.frame[:, 3] - crossed.state.vel) < 1e-6
+
+    # coasting is a flow: two half-legs equal one whole leg when no seam is
+    # crossed and the split lands on the step grid (same steps up to the float
+    # remainder of accumulating 0.02s)
+    ab = J.coast(nothing, scene, J.coast(nothing, scene, cam, 0.5, 0.02), 0.5, 0.02)
+    whole = J.coast(nothing, scene, cam, 1.0, 0.02)
+    if ab.state isa J.SituatedPhase && whole.state isa J.SituatedPhase
+        @test maximum(abs, [ab.state.pos - whole.state.pos; ab.state.vel - whole.state.vel]) < 1e-12
+        @test maximum(abs, ab.frame - whole.frame) < 1e-12
+    end
+
+    # keyframes render from either representation
+    rma = J.keyframe_raymap(nothing, scene, budget, cam0, tan(pi / 6), 4, 3)
+    rmi = J.keyframe_raymap(nothing, scene, budget, cam, tan(pi / 6), 4, 3)
+    @test all(isfinite, rma.vel) && all(isfinite, rmi.vel)
+    @test any(!=(0), rma.side) && any(!=(0), rmi.side)
+end
+
 @testset "camera transport (reference)" begin
     R = J.Reference
     gram(v, E) = E' * J.metric(nothing, v.chart, v.pos) * E

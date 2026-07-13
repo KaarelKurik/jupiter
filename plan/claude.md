@@ -35,17 +35,21 @@ render default).
 - **David mesh path**: res/models/*.stl are triangles; fit_geometry assumes
   quads, so one CC pre-subdivision or a quad remesh comes first; also STL
   loading. (`scripts/david.jl` scaffolding is in kaarel's working copy.)
-- **Camera transport / fly-through**: reference impl AND production port done
-  2026-07-12 (reference.jl + geodesic.jl: transport_flow/transport_step joint
-  RK4 with one shared Γ per step, map_frame riding transitions,
-  settle_transport — mirrors settle_phase, keep hop decisions in sync —
-  trace_transport, emit_ray; SMatrix frames, 0 B/step incl. hops, 448 B
-  boundary box per trace; invariants + reference equivalence tested).
-  Remaining: fly-through rendering — a camera path, transported frames per
-  keyframe, and a render_raymap variant starting from SituatedPhase cameras.
-  Camera = point + arbitrary frame (NOT necessarily orthonormal — no global
-  metric with non-isometric placements; loop holonomy may rescale/shear, and
-  should).
+- **Camera transport / fly-through**: DONE 2026-07-12 end-to-end — reference
+  impl + production port (transport_flow/step joint RK4, map_frame riding
+  transitions, settle_transport, trace_transport, emit_ray; 0 B/step), camera
+  inside the throat (enter_transport = exact inverse of to_ambient via
+  mouth_entry; metric_normalize for geometry-pegged budgets, emit_ray stays
+  raw for effort semantics; SituatedCamera render_raymap; ambient/chart
+  continuity certified in tests), and piecewise-geodesic flight (flight.jl:
+  FlyingCamera, coast crossing mouths both directions with continuous
+  parameter, frame-relative steer/maneuver, keyframe_raymap;
+  scripts/flythrough.jl demo — cube traversal under textured skies, incl. the
+  look-back-from-side-2 frame). Camera = point + arbitrary frame (NOT
+  necessarily orthonormal; loop holonomy may rescale/shear, and should).
+  Longer-term vision (kaarel): smooth curve authoring should be real-time
+  flying controls — either a GPU build or a lighter schematic view with
+  realtime control; not a near-term design driver.
 - **Perf**: see roadmap below. Ground truth for aggressive optimization
   (kaarel's requirement): deliberate semantic changes go to `src/reference.jl`
   first, then production follows; run `scripts/physics_diff.jl` around any
@@ -127,9 +131,10 @@ leverage:
 - src layout since 2026-07-12: meshy.jl (half-edge mesh), cc.jl
   (Catmull-Clark), throat.jl (types + accessors), ad.jl (AD contact surface),
   chart.jl (wedge geometry, blending, surface eval, chart transitions),
-  geodesic.jl (collar/metric/christoffel, steppers, tracers), mouth.jl
-  (Mouth/BVH/enter_mouth), fit.jl (YZ fitting), render.jl, reference.jl
-  (formerly one wew.jl).
+  geodesic.jl (collar/metric/christoffel, steppers, tracers, transport),
+  mouth.jl (Mouth/BVH/enter_mouth/enter_transport), fit.jl (YZ fitting),
+  render.jl (cameras/raymaps/skies), flight.jl (piecewise-geodesic camera
+  flight), reference.jl (formerly one wew.jl).
 
 ## Open items
 
