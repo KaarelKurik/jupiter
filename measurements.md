@@ -4,6 +4,43 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-13b — half-edge flattening (GPU groundwork step 1): Dicts weren't a measurable CPU cost; immutable-Mesh inlining grows the passage boxes
+
+**Motivation.** GPU port step 1: replace Mesh's name-keyed Dicts
+(`half_edges`, `half_edge_offsets`) with flat id-indexed arrays so the
+hot-loop connectivity is device-shaped. Certified as a pure representation
+change (bit-identity), with before/after timing and allocation.
+
+**Method.** Three deterministic knot-hitting trefoil rays (physics_diff aim +
+two 0.01 tilts toward e1/e2), cold runs, min of 5; `@allocated` per ray;
+`Profile.Allocs` at sample_rate 1 by type, before-side run via a jj workspace
+at the parent commit.
+
+**Findings.**
+
+- **Timing unchanged**: 3.27/2.32/2.29 → 3.27/2.31/2.28 ms. The per-step Dict
+  lookups (`next`/`twin`/`prev`/`half_edge_offset` in chart transitions) were
+  not a measurable CPU cost — the step loop is dominated by collar/Γ
+  arithmetic. The value of the flattening is representational (GPU-ready
+  tables), not CPU speed.
+- **Bit-identity trap found and dodged**: `catmullclark` numbers the refined
+  mesh's faces by `collect(he_to_face)` — Dict hash-iteration order. The
+  rebuild helpers (`half_edge_name_to_face_index`/`..._to_next_name`)
+  reconstruct the transient Dict with the historical insertion sequence, so
+  iteration order — hence CC numbering, hence fitted polynomials — is
+  unchanged. Confirmed: physics_diff worst deviations bit-identical to the
+  previous certified run (1.34e-14 cube, 1.84e-10 trefoil), 0 flips, 275/275
+  cold.
+- **Allocation +240–416 B/ray, zero new sites**: same 7 per-passage sum-type
+  boxes (2-passage knot ray). Mechanism: Mesh is immutable and Julia inlines
+  immutable structs into parents, so every box embedding a Mesh-carrying
+  handle inlines Mesh's field block, now 11 pointer fields (88 B) vs 5
+  (40 B). A `SituatedPhase` box holds a Chart = two embedded Mesh copies
+  (HalfThroat chain + HalfEdgeHandle) → +96 B each, matching the profile
+  (800 → 992 B for n=2). Bytes not boxes, per-passage not per-step; the
+  device port carries only the flat tables. If it ever matters: a mutable
+  Mesh (by-reference everywhere) or a slimmer hot handle.
+
 ## 2026-07-13 — temporal sampling for fly-through video: the flow-rate profile, and two ways a flow controller can die
 
 **Motivation.** How densely to sample a fly-through in the flight parameter τ,

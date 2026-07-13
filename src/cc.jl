@@ -72,8 +72,8 @@ requires vertex to sit at center of quad star
 function limit_position(m::Mesh, vertex_index::Int)
 
     fan = handlefan(m, vertex_index)
-    near_vert_indices = [next(handle).name[1] for handle in fan] 
-    diag_vert_indices = [next(handle).name[2] for handle in fan]
+    near_vert_indices = [head_index(handle) for handle in fan]
+    diag_vert_indices = [head_index(next(handle)) for handle in fan]
     n = length(fan)
     central_vert = m.vertices[vertex_index]
     near_vert_avg = sum(m.vertices[ix] for ix in near_vert_indices) / n

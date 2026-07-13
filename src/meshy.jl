@@ -1,21 +1,31 @@
 # convention: vertex induced neighbor is the first in its neighbor list
 
-struct HalfEdge
+struct HalfEdge # construction-time transient; the runtime representation is the flat tables on Mesh
     vertices::NTuple{4, Int}
     face_index::Int
 end
 
-struct Mesh # both vertices and faces consecutively 1-indexed; concrete fields keep the mesh-walking hot loop type-stable
+# both vertices and faces consecutively 1-indexed. Connectivity the hot loop
+# touches is flat, id-indexed arrays (GPU-shaped); name-keyed Dicts appear only
+# transiently during construction and in the CC rebuild helpers below.
+# Half-edge id order: faces in order, slots ccw within each face.
+struct Mesh
     vertices::Vector{Vector{Float64}}
     faces::Vector{Vector{Int}} # ccw
     vertex_neighbors::Vector{Vector{Int}}
-    half_edges::Dict{NTuple{2,Int}, HalfEdge}
-    half_edge_offsets::Dict{NTuple{2,Int}, Int}
+    he_tail::Vector{Int}
+    he_head::Vector{Int}
+    he_next::Vector{Int}
+    he_prev::Vector{Int}
+    he_twin::Vector{Int}
+    he_offset::Vector{Int} # ccw count from the tail vertex's canonical half-edge
+    vertex_he::Vector{Int} # canonical outgoing half-edge: (vertex, first neighbor)
+    vertex_valence::Vector{Int}
 end
 
 struct HalfEdgeHandle
     mesh::Mesh
-    name::NTuple{2, Int}
+    id::Int
 end
 
 function rotoindex(l,r,i)
@@ -52,37 +62,16 @@ function half_edges(faces::Vector{Vector{Int}})
     out
 end
 
-function half_edge_offsets(vertex_neighbors::Vector{Vector{Int}}, half_edges::Dict{NTuple{2,Int}, HalfEdge})
-    out = Dict{NTuple{2,Int}, Int}()
-    for vix=1:length(vertex_neighbors)
-        canonical_neighbor = first(vertex_neighbors[vix])
-        cur_he_name = (vix, canonical_neighbor)
-        cur_he = half_edges[cur_he_name]
-        out[cur_he_name] = 0
-        for j=2:length(vertex_neighbors[vix])
-            cur_he_name = cur_he.vertices[2:-1:1]
-            cur_he = half_edges[cur_he_name]
-            out[cur_he_name] = j-1
-        end
-    end
-    out
-end
-
-# explicit index pairs: range-slicing an NTuple allocates (StepRange goes
-# through a generic map returning a Vector), and these run in the hot loop
 function next(h::HalfEdgeHandle)
-    v = h.mesh.half_edges[h.name].vertices
-    HalfEdgeHandle(h.mesh, (v[3], v[4]))
+    HalfEdgeHandle(h.mesh, h.mesh.he_next[h.id])
 end
 
 function twin(h::HalfEdgeHandle)
-    v = h.mesh.half_edges[h.name].vertices
-    HalfEdgeHandle(h.mesh, (v[3], v[2]))
+    HalfEdgeHandle(h.mesh, h.mesh.he_twin[h.id])
 end
 
 function prev(h::HalfEdgeHandle)
-    v = h.mesh.half_edges[h.name].vertices
-    HalfEdgeHandle(h.mesh, (v[1], v[2]))
+    HalfEdgeHandle(h.mesh, h.mesh.he_prev[h.id])
 end
 
 function ccw(h::HalfEdgeHandle)
@@ -102,21 +91,74 @@ function cw(h::HalfEdgeHandle)
 end
 
 function valence(mesh::Mesh, vertex_index)
-    length(mesh.vertex_neighbors[vertex_index])
+    mesh.vertex_valence[vertex_index]
 end
 
 function vertex_index(h::HalfEdgeHandle)
-    h.name[1]
+    h.mesh.he_tail[h.id]
+end
+
+function head_index(h::HalfEdgeHandle)
+    h.mesh.he_head[h.id]
+end
+
+function he_name(h::HalfEdgeHandle)
+    (vertex_index(h), head_index(h))
 end
 
 function valence(h::HalfEdgeHandle)
     valence(h.mesh, vertex_index(h))
 end
 
+"""
+name -> id by walking the tail vertex's fan; Dict-free so the same lookup
+works against device-side copies of the flat tables
+"""
+function half_edge_id(m::Mesh, name::NTuple{2, Int})
+    e = m.vertex_he[name[1]]
+    for _ in 1:m.vertex_valence[name[1]]
+        m.he_head[e] == name[2] && return e
+        e = m.he_twin[m.he_prev[e]] # ccw
+    end
+    error("no half-edge ", name)
+end
+
+HalfEdgeHandle(m::Mesh, name::NTuple{2, Int}) = HalfEdgeHandle(m, half_edge_id(m, name))
+
 Mesh(vertices::Vector{Vector{Float64}}, faces::Vector{Vector{Int}}) = begin
     vn = vertex_neighbors(faces, length(vertices))
-    he = half_edges(faces)
-    Mesh(vertices, faces, vn, he, half_edge_offsets(vn, he))
+    total = sum(length, faces)
+    ids = Dict{NTuple{2, Int}, Int}() # transient; ids themselves are face-slot order
+    id = 0
+    for f in faces, i in 1:length(f)
+        ids[(f[i], f[mod1(i + 1, length(f))])] = (id += 1)
+    end
+    he_tail = zeros(Int, total); he_head = zeros(Int, total)
+    he_next = zeros(Int, total); he_prev = zeros(Int, total)
+    he_twin = zeros(Int, total); he_offset = zeros(Int, total)
+    id = 0
+    for f in faces
+        L = length(f)
+        for i in 1:L
+            id += 1
+            he_tail[id] = f[i]
+            he_head[id] = f[mod1(i + 1, L)]
+            he_next[id] = ids[(f[mod1(i + 1, L)], f[mod1(i + 2, L)])]
+            he_prev[id] = ids[(f[mod1(i - 1, L)], f[i])]
+            he_twin[id] = ids[(f[mod1(i + 1, L)], f[i])]
+        end
+    end
+    vertex_he = [ids[(v, first(vn[v]))] for v in 1:length(vertices)]
+    vertex_valence = length.(vn)
+    for v in 1:length(vertices)
+        e = vertex_he[v]
+        for j in 0:(vertex_valence[v] - 1)
+            he_offset[e] = j
+            e = he_twin[he_prev[e]] # ccw, matching the fan walk above
+        end
+    end
+    Mesh(vertices, faces, vn, he_tail, he_head, he_next, he_prev, he_twin,
+         he_offset, vertex_he, vertex_valence)
 end
 
 Mesh(metamesh::MetaMesh) = begin
@@ -164,12 +206,15 @@ function edges(m::Mesh)
     out
 end
 
+# rebuilt via half_edges(m.faces) with the historical insertion sequence, so
+# the Dict's iteration order — which catmullclark's face numbering inherits
+# through collect — is unchanged (bit-identity of fitted meshes)
 function half_edge_name_to_face_index(m::Mesh)
-    Dict(name => he.face_index for (name,he) in pairs(m.half_edges))
+    Dict(name => he.face_index for (name,he) in half_edges(m.faces))
 end
 
 function half_edge_name_to_next_name(m::Mesh)
-    Dict(name => he.vertices[3:4] for (name,he) in m.half_edges)
+    Dict(name => he.vertices[3:4] for (name,he) in half_edges(m.faces))
 end
 
 function vertex_to_vertices(m::Mesh)
@@ -200,13 +245,11 @@ end
 handlefan(m::Mesh, vertex_index::Int) = handlefan(vertex_induced_handle(m, vertex_index))
 
 function vertex_induced_handle(m::Mesh, vertex_index::Int)
-    neighbor = first(m.vertex_neighbors[vertex_index])
-    handle = HalfEdgeHandle(m, (vertex_index, neighbor))
-    handle
+    HalfEdgeHandle(m, m.vertex_he[vertex_index])
 end
 
 function half_edge_offset(h::HalfEdgeHandle)
-    h.mesh.half_edge_offsets[h.name]
+    h.mesh.he_offset[h.id]
 end
 
 function handlefan(h::HalfEdgeHandle)

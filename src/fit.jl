@@ -56,7 +56,7 @@ function grid_fitting_indices(grid_handle::HalfEdgeHandle)
         [bh ; accumulate((x,_)->twin(next(next(x))), 1:3, init=bh)]
     end
     grid = [grid_arrangement[i][j] for i=1:3, j=1:4]
-    vertex_indices = [h.name[1] for h in grid]
+    vertex_indices = [vertex_index(h) for h in grid]
     vertex_indices
 end
 
@@ -94,7 +94,7 @@ function fit_geometry(m::Mesh) # this is classic YZ, so assumes quad mesh to sta
     r2 = catmullclark(r1.refined_mesh)
 
     base_handles = [vertex_induced_handle(m, ix) for ix in 1:length(m.vertices)]
-    grid_handle_names = [r2.quarter_edge_map[r1.quarter_edge_map[bh.name]] for bh in base_handles]
+    grid_handle_names = [r2.quarter_edge_map[r1.quarter_edge_map[he_name(bh)]] for bh in base_handles]
     grid_handles = [HalfEdgeHandle(r2.refined_mesh, shn) for shn in grid_handle_names]
 
     limits = limit_positions(r2.refined_mesh)
