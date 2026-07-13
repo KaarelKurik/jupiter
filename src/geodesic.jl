@@ -1,0 +1,166 @@
+# the metric and its geodesics: collar embedding, outer/inner metric blend,
+# christoffels, phase settling across chart/half transitions, and the two
+# tracers (fixed-step RK4, error-controlled DP5(4)).
+
+function collar(env, chart, pos) # surface point pushed inward: s(u,v) − d·n̂(u,v)
+    uv = SVector(pos[1], pos[2])
+    val, jac = value_and_jacobian_columns(situate(surface, env, chart), uv, Val(2))
+    val - pos[3] * normal_from_columns(jac)
+end
+
+function outer_metric(env, chart, pos)
+    cl = situate(collar, env, chart)
+    collar_jac = jacobian_columns(cl, pos, Val(3))
+    collar_jac' * collar_jac
+end
+
+function inner_metric_params(env, chart)
+    params(half_throat(chart))
+end
+
+function inner_metric(env, chart, pos)
+    sf = situate(surface, env, chart)
+    params = inner_metric_params(env, chart)
+    sf_jac = jacobian_columns(sf, SVector(pos[1], pos[2]), Val(2))
+    g = params.cross_scale * sf_jac' * sf_jac
+    z = zero(eltype(g))
+    SMatrix{3, 3}(g[1, 1], g[2, 1], z, g[1, 2], g[2, 2], z, z, z, eltype(g)(params.depth_scale))
+end
+
+function depth_interpolate(t, om, im) # t = depth / cylinder_depth
+    w = blend_scalar(t)
+    w * om + (1 - w) * im
+end
+
+function metric(env, chart, pos)
+    t = pos[3] / inner_metric_params(env, chart).cylinder_depth
+    # the blend is exactly outer for d ≤ 0 and exactly inner past cylinder_depth
+    # (C^∞-flat ends make the skipped half's weight an exact dual zero there)
+    primal(t) <= 0 && return outer_metric(env, chart, pos)
+    primal(t) >= 1 && return inner_metric(env, chart, pos)
+    depth_interpolate(t, outer_metric(env, chart, pos), inner_metric(env, chart, pos))
+end
+
+function christoffel(env, v::SituatedPhase)
+    mf = situate(metric, env, v.chart)
+    # one dual pass with a 3-partial seed: metric value and all three derivatives together
+    tag = typeof(ForwardDiff.Tag(mf, eltype(v.pos)))
+    seeded = SVector{3}(ntuple(i -> ForwardDiff.Dual{tag}(v.pos[i], ntuple(j -> eltype(v.pos)(i == j), Val(3))), Val(3)))
+    md = mf(seeded)
+    dg = ntuple(j -> ForwardDiff.partials.(md, j), Val(3)) # dg[c][a,b] = ∂g_ab/∂x_c
+    inv_m = inv(ForwardDiff.value.(md))
+    SArray{Tuple{3, 3, 3}}(ntuple(Val(27)) do n
+        k = (n - 1) % 3 + 1
+        i = ((n - 1) ÷ 3) % 3 + 1
+        j = (n - 1) ÷ 9 + 1
+        0.5 * sum(inv_m[k, u] * (dg[j][u, i] + dg[i][j, u] - dg[u][i, j]) for u in 1:3)
+    end)
+end
+
+function wvel_along_v(env, v::SituatedPhase, w::SituatedPhase)
+    c = christoffel(env, v)
+    SVector{3}(ntuple(k -> -sum(v.vel[i] * w.vel[j] * c[k, i, j] for i in 1:3, j in 1:3), Val(3)))
+end
+
+function to_ambient(env, v::SituatedPhase)
+    pl = placement(half_throat(v.chart))
+    cl = situate(collar, env, v.chart)
+    AmbientRay(half_throat(v.chart), pl.linear * cl(v.pos) + pl.translation, pl.linear * directional(cl, v.pos, v.vel))
+end
+
+function half_transition(v::SituatedPhase) # the gluing is natural: identity in (u,v), reversal in d
+    td = params(half_throat(v.chart)).transition_depth
+    c2 = Chart(other_half(half_throat(v.chart)), half_edge_handle(v.chart))
+    SituatedPhase(c2, SVector(v.pos[1], v.pos[2], 2 * td - v.pos[3]), SVector(v.vel[1], v.vel[2], -v.vel[3]))
+end
+
+exits_mouth(v::SituatedPhase) = v.pos[3] < 0 && v.vel[3] <= 0 # once here, the flat outer region owns the ray
+
+"""
+re-express v in a chart that contains it comfortably: hop laterally while the
+containing face's square coords leave [0, 1/2]^2, hand over to the other half
+past transition_depth; closed on phases, so mouth exit is the caller's concern
+"""
+function settle_phase(env, v::SituatedPhase, max_hops=8)
+    for _ in 1:max_hops
+        if v.pos[3] > params(half_throat(v.chart)).transition_depth
+            v = half_transition(v)
+            continue
+        end
+        n = valence(v.chart)
+        k = wedge_index(n, v.pos)
+        st = wedge_square_coords(n, k, v.pos)
+        maximum(st) <= 0.5 && return v
+        v = chart_transition(v, st[1] >= st[2] ? k : Int(mod(k + 1, n)))
+    end
+    v # hop budget exhausted; shouldn't happen for step sizes small next to a face
+end
+
+function geodesic_flow(env, v::SituatedPhase)
+    (v.vel, wvel_along_v(env, v, v))
+end
+
+function geodesic_step(env, v::SituatedPhase, h) # one RK4 step, staying in v's chart
+    stage(k, s) = SituatedPhase(v.chart, v.pos + s * k[1], v.vel + s * k[2])
+    k1 = geodesic_flow(env, v)
+    k2 = geodesic_flow(env, stage(k1, h / 2))
+    k3 = geodesic_flow(env, stage(k2, h / 2))
+    k4 = geodesic_flow(env, stage(k3, h))
+    dpos = (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]) / 6
+    dvel = (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]) / 6
+    SituatedPhase(v.chart, v.pos + h * dpos, v.vel + h * dvel)
+end
+
+function trace_geodesic(env, v::SituatedPhase, h, max_steps)
+    for _ in 1:max_steps
+        v = settle_phase(env, geodesic_step(env, v, h))
+        exits_mouth(v) && return to_ambient(env, v)
+    end
+    v # still inside; caller decides whether that's a problem
+end
+
+function flow6(env, chart, u) # phase packed as [pos; vel]
+    vel = SVector(u[4], u[5], u[6])
+    ph = SituatedPhase(chart, SVector(u[1], u[2], u[3]), vel)
+    vcat(vel, wvel_along_v(env, ph, ph))
+end
+
+"""
+one Dormand–Prince 5(4) attempt in a fixed chart: the 5th-order state and the
+embedded 4th-order error estimate (sup norm)
+"""
+function dopri_step(env, chart, u, h)
+    f(x) = flow6(env, chart, x)
+    k1 = f(u)
+    k2 = f(u + h * (1/5)k1)
+    k3 = f(u + h * ((3/40)k1 + (9/40)k2))
+    k4 = f(u + h * ((44/45)k1 - (56/15)k2 + (32/9)k3))
+    k5 = f(u + h * ((19372/6561)k1 - (25360/2187)k2 + (64448/6561)k3 - (212/729)k4))
+    k6 = f(u + h * ((9017/3168)k1 - (355/33)k2 + (46732/5247)k3 + (49/176)k4 - (5103/18656)k5))
+    u5 = u + h * ((35/384)k1 + (500/1113)k3 + (125/192)k4 - (2187/6784)k5 + (11/84)k6)
+    k7 = f(u5)
+    err = h * ((71/57600)k1 - (71/16695)k3 + (71/1920)k4 - (17253/339200)k5 + (22/525)k6 - (1/40)k7)
+    (u5, maximum(abs, err))
+end
+
+"""
+error-controlled trace. h0 seeds the controller; each step is additionally
+capped so it cannot outrun its chart (stages evaluate in one fixed chart,
+trustworthy only out to ~face scale). max_attempts counts accepted AND
+rejected steps: it is the work budget, not the arc length.
+"""
+function trace_geodesic(env, v::SituatedPhase, h0, max_attempts, tol)
+    h = float(h0)
+    for _ in 1:max_attempts
+        h = min(h, 0.25 / (maximum(abs, v.vel) + 1e-12))
+        u = vcat(SVector{3}(v.pos), SVector{3}(v.vel))
+        u5, err = dopri_step(env, v.chart, u, h)
+        scale = tol * (1 + maximum(abs, u))
+        if err <= scale
+            v = settle_phase(env, SituatedPhase(v.chart, SVector(u5[1], u5[2], u5[3]), SVector(u5[4], u5[5], u5[6])))
+            exits_mouth(v) && return to_ambient(env, v)
+        end
+        h = h * clamp(0.9 * (scale / (err + floatmin()))^(1/5), 0.2, 5.0)
+    end
+    v
+end

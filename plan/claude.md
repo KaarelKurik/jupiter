@@ -53,7 +53,7 @@ per ray, and retired the `nested_jacobian_columns` twin along the way.)
 Standing hazard worth remembering: nested/recursive hot code must keep
 self-call signatures exactly constant or Julia's inference widens to Any and
 boxes everything (measurements.md 2026-07-12); the dual-pass primitives in
-wew.jl must keep separate bodies for the same reason. In rough order of
+ad.jl must keep separate bodies for the same reason. In rough order of
 leverage:
 
 - **Cylinder-region product structure**: for d ≥ cylinder_depth the metric is
@@ -111,8 +111,14 @@ leverage:
   guard or comment.
 - AD backend is ForwardDiff (migrated from TaylorDiff 2026-07-08;
   `taylordiff-bugs.md` preserves the harvest). The AD contact surface is
-  `directional(f, x, v)` plus `jacobian_columns(f, x, Val(N))` in wew.jl —
-  swap the backend there if ForwardDiff ever disappoints.
+  `ad.jl` (directional, the two dual-pass primitives, situate) — swap the
+  backend there if ForwardDiff ever disappoints.
+- src layout since 2026-07-12: meshy.jl (half-edge mesh), cc.jl
+  (Catmull-Clark), throat.jl (types + accessors), ad.jl (AD contact surface),
+  chart.jl (wedge geometry, blending, surface eval, chart transitions),
+  geodesic.jl (collar/metric/christoffel, steppers, tracers), mouth.jl
+  (Mouth/BVH/enter_mouth), fit.jl (YZ fitting), render.jl, reference.jl
+  (formerly one wew.jl).
 
 ## Open items
 

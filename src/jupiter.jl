@@ -9,8 +9,13 @@ using StaticArrays
 using TypedPolynomials
 
 include("meshy.jl")
-include("wew.jl")
 include("cc.jl")
+include("throat.jl")
+include("ad.jl")
+include("chart.jl")
+include("geodesic.jl")
+include("mouth.jl")
+include("fit.jl")
 include("render.jl")
 include("reference.jl")
 

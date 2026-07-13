@@ -1,8 +1,8 @@
 # The maintained ground truth: the semantic core in its simplest correct form,
-# on plain arrays, with no performance concessions. The optimized code in
-# wew.jl is an elaboration of this file; the "reference equivalence" testset
-# holds the two together. When semantics change deliberately, change this file
-# first, then make the optimized code agree.
+# on plain arrays, with no performance concessions. The optimized production
+# code (chart.jl/geodesic.jl) is an elaboration of this file; the "reference
+# equivalence" testset holds the two together. When semantics change
+# deliberately, change this file first, then make the optimized code agree.
 #
 # Deliberately shared with the parent (not part of the elaboration): types,
 # mesh/handle machinery and accessors, and the scalar chart primitives
