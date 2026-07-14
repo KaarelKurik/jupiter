@@ -2,10 +2,10 @@
 
 Companion to kaarel's journal (`plan/kaarel.md`); holds current state, the
 roadmap, and standing conventions. Dated session records live alongside as
-`plan/YYYY-MM-DD.md`. Last updated 2026-07-13 (second session). **This file
+`plan/YYYY-MM-DD.md`. Last updated 2026-07-14 (second session). **This file
 is the resume point** — read it plus `jj log` before touching code.
 
-## Where we are (2026-07-13)
+## Where we are (2026-07-14, second session)
 
 The POC pipeline is complete end-to-end and now includes cameras *in and
 through* the wormhole: fitted YZ surface → blending → throat metric →
@@ -30,6 +30,17 @@ pieces, seam-aligned sectors), 10–50x confirmed available, but achievable
 accuracy hinges on the corner-blend choice; that widened into the full
 **Representation fork** section below (C⁴ blend vs manifold splines vs
 level-set) — kaarel picks before step-4 implementation resumes.
+2026-07-14 second session (kaarel's call: try the simple road before
+tabulating): the type layer went storage-parametric (bit-identical) and the
+**production christoffel now runs unmodified in a device kernel** via Adapt —
+no second-order-AD compilability wall. Float64 is spill-bound and loses to
+the multicore CPU (5.5x one thread ≈ 1/3 of 16); **Float32 is the road**:
+14.3x one CPU thread naive (~29x with depth binning; still spill-bound, so a
+floor), and Γ accuracy vs F64 truth (median 9.5e-7, max 1.1e-5 sup-relative)
+**beats every tabulation variant at exact blend semantics — the
+representation fork no longer gates the GPU port** (measurements.md
+2026-07-14b). Christoffel path is eltype-honest (carrier() in ad.jl);
+steppers/transitions still carry F64 literals.
 Gallery: first_light, textured trefoil, cube first flythrough.
 
 ## Next candidates, kaarel picks the order
@@ -38,21 +49,47 @@ Gallery: first_light, textured trefoil, cube first flythrough.
   CPU-first groundwork aiming at mechanical device translation; tiering is a
   chain — GPU certified against production, production against reference,
   reference the sole oracle). Step 4: tabulated Γ developed on CPU against
-  reference — **probed 2026-07-14, implementation waiting on the
-  representation fork** (see that section; kaarel leans C⁴ if YZ tabulation
-  proceeds; measurements.md 2026-07-14): depth factors out of the tables
-  exactly (g_outer quadratic in d, blend scalar exact at runtime); lateral
-  domain = seam-aligned per-wedge polar sectors + tiny Cartesian core; AD
-  christoffel measured 26–32 µs vs ~1–4 µs estimated table eval, so the
-  10–50x holds — but accuracy is corner-blend-limited: exp-flat plateaus at
-  ~1e-3 relative Γ, a C⁴ polynomial blend reaches ~1e-5 (with AD fallback at
-  irregular-vertex cores) at the cost of a deliberate physics change
-  (re-fit/re-baseline/gallery re-render). C² blends are worse than both.
-  Step 5: the real port — device throat view
-  (packed_polys still Vector{Array}, needs one padded/offset array), wavefront
-  restructure of the passage loop (kernels can't heap-allocate the per-passage
-  sum-type boxes), Float32 policy measured against Float64-on-device.
-  `gpu/` subenv holds CUDA.jl; `scripts/gpu_smoke.jl` is the compile check.
+  reference — probed 2026-07-14 (measurements.md; depth factors out exactly,
+  seam-aligned sectors, 10–50x per eval *on the CPU* holds, accuracy
+  corner-blend-limited: exp-flat ~1e-3, C⁴ ~1e-5 with a deliberate physics
+  change) — **demoted from the GPU critical path 2026-07-14b**: kaarel had
+  the simpler road tried first, and direct in-kernel AD christoffel at
+  Float32 out-accuracies the tables (median 9.5e-7 sup-rel) at exact blend
+  semantics and ≈ full-CPU speed naive. Tabulation remains a CPU-side
+  option gated on the representation fork. Step 5: the rest of the real
+  port, in order of what today's floor says matters — wavefront restructure
+  of the passage loop (kernels can't heap-allocate the per-passage sum-type
+  boxes; depth-bin rays while at it: divergence costs ~2.3x today),
+  eltype-honesty extended past christoffel (steppers/settle/transitions
+  still carry F64 literals) so F32 traces exist to judge. Judging them
+  (kaarel 2026-07-14b): **not sup exit-map error** — the exit map
+  image→(side, ray) is discontinuous across the limit-cycle boundary, so
+  worst-case error is unbounded a priori for *any* method; measure instead
+  the physics_diff decomposition — side-flip rate F32-vs-F64 (size of the
+  undecidable band), deviation conditional on side agreement — plus
+  eyeballed F32/F64 render pairs as the acceptance bar (image accuracy is
+  the standard that already picked RK4). Conditional-deviation aggregates
+  (discussed 2026-07-14b): the conditional tail is power-law (deviation ~
+  ε·κ, κ ~ r^(−λ/λ′) near the boundary), so the *mean* may not exist —
+  use quantiles / log-mean / exceedance fraction at a sub-pixel threshold
+  (the acceptance-aligned scalar); the structural test is quantile-curve
+  parallelism against an F64 1-ulp noise baseline (offset ~2^29 = "just
+  rounding", bends = pathology); the endgame is Jacobi-field κ
+  normalization (same infrastructure as ray bundles + the F64-fallback
+  pixel flag), with passage-count binning as the cheap pre-Jacobi proxy. Register pressure: the named
+  lever is **hand-rolled derivatives in production, AD stays in reference
+  as the oracle** (kaarel 2026-07-14b) — the 27KB/thread F32 spill is dual
+  bloat (48 carrier floats per scalar, mostly structural zeros); Γ needs
+  s..∂³s through polynomial∘wedge∘blend, all closed-form (poly derivatives
+  are packable polys, wedge is powers of z, blend/depth are scalar 1D
+  chains), certified against reference AD exactly like every production
+  optimization. Doubles as the portability road: realtime-flying endpoints
+  likely mean shader stacks with no Julia AD, and 255-reg kernels hurt on
+  every card. Subsumes "split the fused dual passes" surgery. `gpu/`
+  subenv holds CUDA.jl (+Adapt); `scripts/gpu_smoke.jl` is the compile
+  check, `scripts/gpu_christoffel.jl` the christoffel bench (its
+  PackedTable/adapt rules promote to a gpu/ module when the tracer kernel
+  lands).
 - **Silhouette tightening**: tessellation-only first-hit gives a polygonal
   wormhole outline (spurious rim misses). `Mouth` is an abstract interface
   ready for a second strategy (outward-offset tessellation, or a conservative
@@ -96,7 +133,11 @@ Gallery: first_light, textured trefoil, cube first flythrough.
 The step-4 probes (measurements.md 2026-07-14) reduced tabulated-Γ accuracy
 to one question — the corner blend's smoothness class — and localized the
 hard points at irregular (valence ≠ 4) vertices. That reframes the
-representation choices; all plausible paths in one place, kaarel to pick:
+representation choices; all plausible paths in one place, kaarel to pick.
+**Scope narrowed 2026-07-14b**: the fork no longer gates the GPU port
+(direct F32 AD christoffel beats the tables' accuracy in-kernel at
+acceptable speed — measurements.md 2026-07-14b); it remains live as the
+CPU-perf / representation-elegance question, on kaarel's clock:
 
 1. **Stay YZ + C⁴ corner blend** (kaarel's lean *if* tabulation on the
    current representation proceeds). Nonic smootherstep corner blend: sector
