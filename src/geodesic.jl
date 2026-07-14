@@ -22,7 +22,7 @@ function inner_metric(env, chart, pos)
     sf = situate(surface, env, chart)
     params = inner_metric_params(env, chart)
     sf_jac = jacobian_columns(sf, SVector(pos[1], pos[2]), Val(2))
-    g = params.cross_scale * sf_jac' * sf_jac
+    g = carrier(pos[1])(params.cross_scale) * sf_jac' * sf_jac
     z = zero(eltype(g))
     SMatrix{3, 3}(g[1, 1], g[2, 1], z, g[1, 2], g[2, 2], z, z, z, eltype(g)(params.depth_scale))
 end
@@ -33,7 +33,7 @@ function depth_interpolate(t, om, im) # t = depth / cylinder_depth
 end
 
 function metric(env, chart, pos)
-    t = pos[3] / inner_metric_params(env, chart).cylinder_depth
+    t = pos[3] / carrier(pos[3])(inner_metric_params(env, chart).cylinder_depth)
     # the blend is exactly outer for d ≤ 0 and exactly inner past cylinder_depth
     # (C^∞-flat ends make the skipped half's weight an exact dual zero there)
     primal(t) <= 0 && return outer_metric(env, chart, pos)
@@ -49,11 +49,12 @@ function christoffel(env, v::SituatedPhase)
     md = mf(seeded)
     dg = ntuple(j -> ForwardDiff.partials.(md, j), Val(3)) # dg[c][a,b] = ∂g_ab/∂x_c
     inv_m = inv(ForwardDiff.value.(md))
+    half = carrier(v.pos[1])(0.5)
     SArray{Tuple{3, 3, 3}}(ntuple(Val(27)) do n
         k = (n - 1) % 3 + 1
         i = ((n - 1) ÷ 3) % 3 + 1
         j = (n - 1) ÷ 9 + 1
-        0.5 * sum(inv_m[k, u] * (dg[j][u, i] + dg[i][j, u] - dg[u][i, j]) for u in 1:3)
+        half * sum(inv_m[k, u] * (dg[j][u, i] + dg[i][j, u] - dg[u][i, j]) for u in 1:3)
     end)
 end
 

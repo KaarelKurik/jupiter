@@ -4,6 +4,75 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-14b — production christoffel straight on the GPU: Float64 loses to the CPU, Float32 matches it naive and beats every tabulation variant on accuracy
+
+**Motivation.** Kaarel's call for this session: before tabulating Γ (and
+before the representation fork that tabulation accuracy opened), try the
+simpler road — run the production AD christoffel *directly* in a kernel and
+see what the card actually does with it. The step-3 smoke test only compiled
+the first-order dual pass; christoffel is second-order (a 3-partial seed over
+`metric`, whose collar/surface evals are themselves dual passes — innermost
+scalars are (1+3)(1+3)(1+2) = 48 carrier floats), which was the untested
+compilability wall.
+
+**Method.** The type layer was made storage-parametric (pure type
+generalization; 275 tests + physics_diff bit-identical), so the real cube
+`Throat` Adapt-s onto the device: ragged construction-only Mesh fields drop
+to `nothing`, packed_polys pad into one 4D array behind a view wrapper
+(padding sits at the leading end of the descending Horner loop — evaluation
+bit-identical). The kernel builds the tracer's own `SituatedPhase` from
+half-edge ids and calls `jupiter.christoffel` unmodified
+(scripts/gpu_christoffel.jl, kept). 200k points sweep all 8 charts, all
+wedges, st ∈ [0.02, 0.98]², and all three depth branches (25% pure outer
+d<0, the rest through blend and pure inner). CPU truth: the same production
+christoffel, Float64, 1 thread (20–22 µs/eval, matching the step-4 26–32 µs
+on fancier charts). For the Float32 leg, the christoffel path was first made
+eltype-honest — Float64 literals (sqrt2, the 2π sincos wedge angles, wedge
+powers n/4 and 4/n, 0.5) and ThroatParams field reads convert to
+`carrier(x)` = the innermost primal type through the dual nesting — with
+Float64 certified bit-identical (tests + physics_diff 0.0) since every
+conversion is F64→F64 identity there.
+
+**Findings** (RTX 4070 SUPER, 1:64 FP64; npoints=200k, threads 64/128/256
+indistinguishable, 512 exceeds the 64K regs/block budget):
+
+- **No compilability wall.** The full second-order nested-dual christoffel —
+  wedge transcendentals, blend, collar, 3×3 inverse — compiles clean and
+  matches CPU to 2.1e-13 abs / 2.1e-14 sup-relative (device libm, not bugs).
+- **Float64 is spill-bound and loses to the multicore CPU**: 255 registers
+  (the cap) + 52,648 B/thread local spill; 3.9–4.1 µs/eval mixed = 5.0–5.5x
+  one CPU thread ≈ 1/3 of the 16-thread CPU. Not a usable port.
+- **Float32 is 2.8x faster than F64-on-device and ≈ the whole CPU, naive**:
+  1.43 µs/eval mixed = 14.3x one CPU thread (0.70 Meval/s). Still 255 regs +
+  27,672 B spill — spill-bound, not flop-bound, so this is a floor, not the
+  card's ceiling.
+- **Branch divergence costs ~2.3x on both types**: uniform-depth-branch
+  launches give 2.09–2.14 (outer) / 2.13–2.14 (blend) / 0.14–0.17 (inner)
+  µs/eval at F64, 0.58 / 0.63 / 0.06 at F32, vs 3.9 / 1.43 mixed — warps
+  near-fully serialize the three depth branches (blend ≈ outer + inner as
+  expected: the blend evaluates both metrics; inner is 15x cheaper, no
+  collar jacobian). Depth-binning rays in a wavefront structure recovers
+  ~2x ⇒ F32 ~29x one CPU thread without touching physics.
+- **Float32 Γ accuracy beats every tabulation variant probed**: vs Float64
+  truth, sup-relative per point median 9.5e-7, p99 3.8e-6, max 1.1e-5 —
+  better than the C⁴-blend table target (~1e-5), far better than exp-flat
+  (~1e-3), and it is the *exact* blend semantics merely rounded, so nothing
+  is re-fit, re-baselined, or re-rendered.
+
+**Read.** The corner-blend accuracy problem that opened the representation
+fork does not gate the GPU road: the card can afford to evaluate the truth.
+The fork stays open as a CPU-side/representation question (tabulation still
+wins 10–50x *on the CPU*, and affine atlases/level sets have independent
+virtues), but the port no longer waits on it. What F32 does **not** yet
+answer is end-to-end: Γ-eval error is not exit-map error — F32 positions
+accumulate over hundreds of steps and chaotic bands amplify; the planned
+policy (F32 with F64 fallback for flagged pixels) needs a traced comparison,
+which wants the eltype-honesty sweep extended past christoffel to the
+steppers/transitions (settle, half_transition, the integrators still carry
+F64 literals). That, plus the wavefront restructure, is the remaining
+step-5 work; register-pressure surgery (splitting the fused dual passes) is
+the optimization deliberately not done today.
+
 ## 2026-07-14 — tabulated Γ (GPU step 4) probed: depth factors out exactly; lateral convergence is blend-limited, and the two blends fail in complementary places
 
 **Motivation.** Step 4 planned "Chebyshev-tabulated Γ per face×depth box

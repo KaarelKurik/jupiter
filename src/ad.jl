@@ -5,6 +5,10 @@
 primal(x) = x
 primal(d::ForwardDiff.Dual) = primal(ForwardDiff.value(d)) # recurse: christoffel nests duals
 
+# the innermost scalar type through any dual nesting: what Float64 constants
+# convert to so they scale with the phase's precision instead of promoting it
+carrier(x) = typeof(primal(x))
+
 directional(f, x, v) = ForwardDiff.derivative(t -> f(x .+ t .* v), 0.0)
 
 # The two dual-pass primitives below must keep separate bodies: when one pass

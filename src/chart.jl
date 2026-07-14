@@ -7,16 +7,18 @@ safe_atan2(y, x) = primal(x) >= 0 ? 2 * atan(y / (sqrt(x^2 + y^2) + x)) : 2 * at
 
 function fake_complex_pow(z, power)
     iszero(primal(z[1])) && iszero(primal(z[2])) && return SVector(zero(z[1]), zero(z[2])) # safe_atan2 is 0/0 at the origin
+    p = carrier(z[1])(power)
     α = safe_atan2(z[2], z[1])
     n = sqrt(z[1]^2 + z[2]^2)
-    β = power * α
+    β = p * α
     s,c = sincos(β)
-    n^power * SVector(c, s)
+    n^p * SVector(c, s)
 end
 
 function wedge_map(source_n, target_n, pos)
+    C = carrier(pos[1])
     a1 = fake_complex_pow(pos, source_n/4)
-    a2 = SVector(1/sqrt(2), 0.0) - a1
+    a2 = SVector(C(1/sqrt(2)), zero(C)) - a1
     a3 = fake_complex_pow(a2, 4/target_n)
     a3
 end
@@ -39,14 +41,16 @@ chart coords -> [0,1]^2 coords of the face at wedge_index,
 with u along the wedge's starting edge
 """
 function wedge_square_coords(n_wedges, wedge_index, pos)
-    s, c = sincos(-2pi * wedge_index / n_wedges)
+    C = carrier(pos[1])
+    s, c = sincos(C(-2pi * wedge_index / n_wedges)) # angle exact in Float64, one rounding into C
     rpos = SVector(c * pos[1] - s * pos[2], s * pos[1] + c * pos[2])
-    sqrt(2) * fake_complex_pow(rpos, n_wedges / 4)
+    C(sqrt(2)) * fake_complex_pow(rpos, n_wedges / 4)
 end
 
 function square_coords_to_chart(n_wedges, wedge_index, st)
-    z = fake_complex_pow(st / sqrt(2), 4 / n_wedges)
-    s, c = sincos(2pi * wedge_index / n_wedges)
+    C = carrier(st[1])
+    z = fake_complex_pow(st / C(sqrt(2)), 4 / n_wedges)
+    s, c = sincos(C(2pi * wedge_index / n_wedges))
     SVector(c * z[1] - s * z[2], s * z[1] + c * z[2])
 end
 

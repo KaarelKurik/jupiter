@@ -41,23 +41,26 @@ Adapt.@adapt_structure J.Surface
 Adapt.@adapt_structure J.Throat
 
 # host-side device view: flat tables as CuArrays, host-only fields dropped;
-# @cuda's cudaconvert recurses through the adapt rules above at launch
-function device_throat(th::J.Throat)
+# @cuda's cudaconvert recurses through the adapt rules above at launch.
+# T picks the on-device scalar type; the eltype-honest christoffel path then
+# computes wholly in T because the phase and the packed table carry it.
+function device_throat(th::J.Throat, T)
     m = J.mesh(J.geometry(th))
     dmesh = J.Mesh(nothing, nothing, nothing,
                    (CuArray(getfield(m, f)) for f in
                     (:he_tail, :he_head, :he_next, :he_prev, :he_twin,
                      :he_offset, :vertex_he, :vertex_valence))...)
     padded = PackedTable(J.packed_polys(J.geometry(th)))
-    dsurf = J.Surface(dmesh, nothing, PackedTable(CuArray(padded.a)))
+    dsurf = J.Surface(dmesh, nothing, PackedTable(CuArray(T.(padded.a))))
     J.Throat(dsurf, J.params(th), th.placements)
 end
 
 function kernel_christoffel(out, throat, hes, poss)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     i > size(poss, 2) && return nothing
+    T = eltype(poss)
     chart = J.Chart(J.HalfThroat(throat, 1), J.HalfEdgeHandle(J.mesh(J.HalfThroat(throat, 1)), hes[i]))
-    v = J.SituatedPhase(chart, J.SVector(poss[1, i], poss[2, i], poss[3, i]), J.SVector(0.0, 0.0, 1.0))
+    v = J.SituatedPhase(chart, J.SVector(poss[1, i], poss[2, i], poss[3, i]), J.SVector(zero(T), zero(T), one(T)))
     Γ = J.christoffel(nothing, v)
     for k in 1:27
         out[k, i] = Γ[k]
@@ -101,45 +104,51 @@ function main()
         poss[:, k] = [uv[1], uv[2], d]
     end
 
-    dth = device_throat(th)
     d_hes = CuArray(hes)
-    d_poss = CuArray(poss)
-    d_out = CUDA.zeros(Float64, 27, npoints)
-
-    kc = @cuda launch=false kernel_christoffel(d_out, dth, d_hes, d_poss)
-    mem = CUDA.memory(kc)
-    println("kernel registers: ", CUDA.registers(kc), "   local (spill) bytes: ", mem.local, "   shared: ", mem.shared)
-
-    kc(d_out, dth, d_hes, d_poss; threads = 256, blocks = cld(npoints, 256)); CUDA.synchronize() # warm
-    times = map((64, 128, 256)) do threads # 512 exceeds the 64K regs/block budget at 255 regs/thread
-        t = CUDA.@elapsed kc(d_out, dth, d_hes, d_poss; threads, blocks = cld(npoints, threads))
-        println("  threads=", threads, ": ", round(t * 1000, digits = 1), " ms")
-        t
-    end
-    tg = minimum(times)
-    gpu_out = Array(d_out) # before the divergence launches overwrite it
-
-    # branch-divergence datum: same lateral points, all three depth branches
-    # uniform per launch (warps never split on the metric's depth branch)
-    for (name, dfix) in (("pure outer (d=-0.1)", -0.1), ("blend (d=0.25)", 0.25), ("pure inner (d=0.6)", 0.6))
-        d_pu = CuArray(vcat(poss[1:2, :], fill(dfix, 1, npoints)))
-        t = CUDA.@elapsed kc(d_out, dth, d_hes, d_pu; threads = 256, blocks = cld(npoints, 256))
-        println("  ", name, ": ", round(t / npoints * 1e6, digits = 2), " µs/eval uniform-branch")
-    end
 
     nsub = min(npoints, 20_000)
     cpu_christoffels(th, hes[1:10], poss[:, 1:10]) # warm
     tc = @elapsed cpu_out = cpu_christoffels(th, hes[1:nsub], poss[:, 1:nsub])
+    println("cpu 1 thread: ", round(tc / nsub * 1e6, digits = 2), " µs/eval (truth on $nsub points)")
 
-    diff = maximum(abs, gpu_out[:, 1:nsub] - cpu_out)
+    for T in (Float64, Float32)
+        dth = device_throat(th, T)
+        d_poss = CuArray(T.(poss))
+        d_out = CUDA.zeros(T, 27, npoints)
 
-    println("production christoffel, $npoints points (cpu truth on $nsub):")
-    println("  gpu ", round(tg * 1000, digits = 2), " ms  (",
-            round(tg / npoints * 1e9, digits = 1), " ns/eval, ",
-            round(npoints / tg / 1e6, sigdigits = 3), " Meval/s)")
-    println("  cpu 1 thread ", round(tc / nsub * 1e6, digits = 2), " µs/eval")
-    println("  speedup vs 1 cpu thread: ", round(tc / nsub / (tg / npoints), sigdigits = 3), "x")
-    println("  max |gpu - cpu| = ", diff)
+        kc = @cuda launch=false kernel_christoffel(d_out, dth, d_hes, d_poss)
+        mem = CUDA.memory(kc)
+        println(T, ":")
+        println("  registers: ", CUDA.registers(kc), "   local (spill) bytes: ", mem.local)
+
+        kc(d_out, dth, d_hes, d_poss; threads = 256, blocks = cld(npoints, 256)); CUDA.synchronize() # warm
+        times = map((64, 128, 256)) do threads # 512 exceeds the 64K regs/block budget at 255 regs/thread
+            CUDA.@elapsed kc(d_out, dth, d_hes, d_poss; threads, blocks = cld(npoints, threads))
+        end
+        tg = minimum(times)
+        gpu_out = Float64.(Array(d_out)) # before the divergence launches overwrite it
+
+        # branch-divergence datum: same lateral points, all three depth branches
+        # uniform per launch (warps never split on the metric's depth branch)
+        for (name, dfix) in (("pure outer (d=-0.1)", -0.1), ("blend (d=0.25)", 0.25), ("pure inner (d=0.6)", 0.6))
+            d_pu = CuArray(T.(vcat(poss[1:2, :], fill(dfix, 1, npoints))))
+            t = CUDA.@elapsed kc(d_out, dth, d_hes, d_pu; threads = 256, blocks = cld(npoints, 256))
+            println("  ", name, ": ", round(t / npoints * 1e6, digits = 2), " µs/eval uniform-branch")
+        end
+
+        println("  mixed branches: ", round(tg * 1000, digits = 2), " ms  (",
+                round(tg / npoints * 1e9, digits = 1), " ns/eval, ",
+                round(npoints / tg / 1e6, sigdigits = 3), " Meval/s)")
+        println("  speedup vs 1 cpu thread: ", round(tc / nsub / (tg / npoints), sigdigits = 3), "x")
+
+        # accuracy vs the Float64 cpu truth: absolute, and per-point sup-relative
+        adiff = vec(maximum(abs, gpu_out[:, 1:nsub] - cpu_out, dims = 1))
+        rel = sort(adiff ./ max.(vec(maximum(abs, cpu_out, dims = 1)), 1e-12))
+        println("  vs cpu truth: max abs ", round(maximum(adiff), sigdigits = 3),
+                "   sup-relative median ", round(rel[(nsub + 1) ÷ 2], sigdigits = 3),
+                "  p99 ", round(rel[ceil(Int, 0.99 * nsub)], sigdigits = 3),
+                "  max ", round(rel[end], sigdigits = 3))
+    end
 end
 
 main()
