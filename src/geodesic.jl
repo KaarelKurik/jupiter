@@ -67,12 +67,14 @@ end
 
 function to_ambient(env, v::SituatedPhase)
     pl = placement(half_throat(v.chart))
+    C = carrier(v.pos[1])
+    lin = SMatrix{3, 3, C}(pl.linear)
     cl = situate(collar, env, v.chart)
-    AmbientRay(half_throat(v.chart), pl.linear * cl(v.pos) + pl.translation, pl.linear * directional(cl, v.pos, v.vel))
+    AmbientRay(half_throat(v.chart), lin * cl(v.pos) + SVector{3, C}(pl.translation), lin * directional(cl, v.pos, v.vel))
 end
 
 function half_transition(v::SituatedPhase) # the gluing is natural: identity in (u,v), reversal in d
-    td = params(half_throat(v.chart)).transition_depth
+    td = carrier(v.pos[3])(params(half_throat(v.chart)).transition_depth)
     c2 = Chart(other_half(half_throat(v.chart)), half_edge_handle(v.chart))
     SituatedPhase(c2, SVector(v.pos[1], v.pos[2], 2 * td - v.pos[3]), SVector(v.vel[1], v.vel[2], -v.vel[3]))
 end
@@ -115,6 +117,7 @@ function geodesic_step(env, v::SituatedPhase, h) # one RK4 step, staying in v's 
 end
 
 function trace_geodesic(env, v::SituatedPhase, h, max_steps)
+    h = carrier(v.pos[1])(h)
     for _ in 1:max_steps
         v = settle_phase(env, geodesic_step(env, v, h))
         exits_mouth(v) && return to_ambient(env, v)
@@ -134,15 +137,16 @@ embedded 4th-order error estimate (sup norm)
 """
 function dopri_step(env, chart, u, h)
     f(x) = flow6(env, chart, x)
+    c = carrier(u[1]) # tableau ratios computed in Float64, one rounding into the carrier
     k1 = f(u)
-    k2 = f(u + h * (1/5)k1)
-    k3 = f(u + h * ((3/40)k1 + (9/40)k2))
-    k4 = f(u + h * ((44/45)k1 - (56/15)k2 + (32/9)k3))
-    k5 = f(u + h * ((19372/6561)k1 - (25360/2187)k2 + (64448/6561)k3 - (212/729)k4))
-    k6 = f(u + h * ((9017/3168)k1 - (355/33)k2 + (46732/5247)k3 + (49/176)k4 - (5103/18656)k5))
-    u5 = u + h * ((35/384)k1 + (500/1113)k3 + (125/192)k4 - (2187/6784)k5 + (11/84)k6)
+    k2 = f(u + h * c(1/5)*k1)
+    k3 = f(u + h * (c(3/40)*k1 + c(9/40)*k2))
+    k4 = f(u + h * (c(44/45)*k1 - c(56/15)*k2 + c(32/9)*k3))
+    k5 = f(u + h * (c(19372/6561)*k1 - c(25360/2187)*k2 + c(64448/6561)*k3 - c(212/729)*k4))
+    k6 = f(u + h * (c(9017/3168)*k1 - c(355/33)*k2 + c(46732/5247)*k3 + c(49/176)*k4 - c(5103/18656)*k5))
+    u5 = u + h * (c(35/384)*k1 + c(500/1113)*k3 + c(125/192)*k4 - c(2187/6784)*k5 + c(11/84)*k6)
     k7 = f(u5)
-    err = h * ((71/57600)k1 - (71/16695)k3 + (71/1920)k4 - (17253/339200)k5 + (22/525)k6 - (1/40)k7)
+    err = h * (c(71/57600)*k1 - c(71/16695)*k3 + c(71/1920)*k4 - c(17253/339200)*k5 + c(22/525)*k6 - c(1/40)*k7)
     (u5, maximum(abs, err))
 end
 
@@ -153,9 +157,11 @@ trustworthy only out to ~face scale). max_attempts counts accepted AND
 rejected steps: it is the work budget, not the arc length.
 """
 function trace_geodesic(env, v::SituatedPhase, h0, max_attempts, tol)
-    h = float(h0)
+    C = carrier(v.pos[1])
+    h = C(h0)
+    tol = C(tol)
     for _ in 1:max_attempts
-        h = min(h, 0.25 / (maximum(abs, v.vel) + 1e-12))
+        h = min(h, C(0.25) / (maximum(abs, v.vel) + C(1e-12)))
         u = vcat(SVector{3}(v.pos), SVector{3}(v.vel))
         u5, err = dopri_step(env, v.chart, u, h)
         scale = tol * (1 + maximum(abs, u))
@@ -163,7 +169,7 @@ function trace_geodesic(env, v::SituatedPhase, h0, max_attempts, tol)
             v = settle_phase(env, SituatedPhase(v.chart, SVector(u5[1], u5[2], u5[3]), SVector(u5[4], u5[5], u5[6])))
             exits_mouth(v) && return to_ambient(env, v)
         end
-        h = h * clamp(0.9 * (scale / (err + floatmin()))^(1/5), 0.2, 5.0)
+        h = h * clamp(C(0.9) * (scale / (err + floatmin(C)))^C(1/5), C(0.2), C(5.0))
     end
     v
 end
@@ -225,8 +231,8 @@ end
 
 function to_ambient(env, v::SituatedPhase, E::SMatrix{3, N}) where {N} # frame columns out via the collar differential
     cl = situate(collar, env, v.chart)
-    pl = placement(half_throat(v.chart))
-    (to_ambient(env, v), hcat(ntuple(col -> pl.linear * directional(cl, v.pos, E[:, col]), Val(N))...))
+    lin = SMatrix{3, 3, carrier(v.pos[1])}(placement(half_throat(v.chart)).linear)
+    (to_ambient(env, v), hcat(ntuple(col -> lin * directional(cl, v.pos, E[:, col]), Val(N))...))
 end
 
 """
@@ -235,6 +241,7 @@ tangent-vector columns) along it; returns (AmbientRay, ambient frame) on mouth
 exit, (SituatedPhase, E) when out of steps
 """
 function trace_transport(env, v::SituatedPhase, E::SMatrix, h, max_steps)
+    h = carrier(v.pos[1])(h)
     for _ in 1:max_steps
         v, E = settle_transport(env, transport_step(env, v, E, h)...)
         exits_mouth(v) && return to_ambient(env, v, E)
@@ -251,7 +258,8 @@ semantics (and shows holonomy rescale honestly); pipe through metric_normalize
 for geometry-pegged budgets, which is what rendering wants.
 """
 function emit_ray(chart, pos, frame, tan_half_fov, x, y)
-    SituatedPhase(chart, pos, frame * SVector(x * tan_half_fov, y * tan_half_fov, 1.0))
+    C = carrier(pos[1])
+    SituatedPhase(chart, pos, frame * SVector(C(x * tan_half_fov), C(y * tan_half_fov), one(C)))
 end
 
 function metric_normalize(env, v::SituatedPhase) # unit metric speed: g(vel, vel) = 1

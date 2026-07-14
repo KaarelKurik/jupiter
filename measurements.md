@@ -4,6 +4,95 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-14c — F32 traced end-to-end: quantile curves parallel to the 1-ulp baseline (offset ≈ 2^28 = "just rounding"), the undecidable band is ~1e-4 of pixels and sits on the limit-cycle boundary, renders indistinguishable
+
+**Motivation.** 2026-07-14b established F32 christoffel accuracy per *eval*
+(median 9.5e-7 sup-rel) but flagged that Γ-eval error is not exit-map error:
+F32 state accumulates over hundreds of steps and chaotic stretches amplify.
+Kaarel's metric correction governs the design here: the exit map
+image→(side, ray) is discontinuous at the limit-cycle boundary, so sup
+exit-map error is vacuous for *any* finite-precision method — measure the
+physics_diff decomposition instead (side-flip rate = size of the undecidable
+band; deviation conditional on side agreement, in tail-safe aggregates,
+since deviation ~ ε·κ(ray) with κ power-law near the boundary means even the
+conditional *mean* need not exist), plus eyeballed render pairs as the
+acceptance bar.
+
+**Method.** Two parts.
+
+- *Eltype-honesty completed past christoffel* (the 14b sweep's remainder):
+  the dopri tableau ratios (previously `(1/5)k1`-style Float64 literals),
+  the tracers' h/tol/`floatmin()`, RK4's h, `half_transition`'s
+  transition_depth read, `to_ambient`'s Placement reads, `emit_ray`'s 1.0,
+  `view_phase_at_target`'s rotation angle (kept exact in Float64, one
+  rounding into the carrier — the wedge_square_coords idiom), and
+  `directional`'s Float64 derivative seed in ad.jl all convert to
+  `carrier(x)` instead of promoting. Float64 semantics certified unchanged —
+  275 tests green, physics_diff deviation exactly 0.0 — since every
+  conversion is F64→F64 identity there.
+- *The F32 trace design* (scripts/precision_diff.jl — tracked, not
+  disposable: it is the standing precision-acceptance instrument,
+  physics_diff's sibling): mouth entry stays an F64 Newton solve against the
+  F32-coefficient surface (once per passage, well-conditioned, and the
+  plausible wavefront split anyway); the phase converts to F32 at entry; the
+  in-throat trace runs wholly in F32 on Float32-rounded polynomial tables
+  (mirroring device_throat — with F64 tables eval_packed would silently
+  promote every step back to F64); exits convert at to_ambient and re-enter
+  the next passage in F64. 8000-ray golden-angle bundles through the two
+  physics_diff scenes (budget 0.05/400/4), four variants: **truth** (F64),
+  **ulp** (F64, direction perturbed by ~1 ulp — the "just rounding"
+  baseline), **tab32** (F64 arithmetic on F32 tables — isolates
+  representation rounding from arithmetic rounding), **f32** (the GPU
+  candidate). Angles via 2·asin(‖n̂₁−n̂₂‖/2); conditional stats over rays
+  where both variants resolve to the same side (sky-miss rays are in the
+  denominator and deviate by exactly 0 there — cube 67%, trefoil 35% of the
+  bundle).
+
+**Findings** (conditional angular deviation in radians; 1e-3 rad ≈ ⅓ pixel
+at 384-wide/60°-fov, sub-pixel at anything plausible):
+
+- cube: ulp q50/q90/q99/max 1.7e-16 / 3.3e-15 / 3.0e-14 / 7.5e-11;
+  tab32 0 / 1.4e-7 / 1.4e-6 / 0.021; **f32 0 / 5.0e-7 / 2.9e-6 / 0.118**.
+  Side flips 0/8000 every variant. Exceedance(1e-3) for f32: 0.04%
+  (3 rays, the same grazing-rim rays that dominate tab32's tail).
+- trefoil: ulp 9.1e-15 / 9.2e-14 / 3.8e-12 / 2.4e-9;
+  tab32 8.7e-7 / 8.3e-6 / 3.2e-4 / 0.31; **f32 2.8e-6 / 3.1e-5 / 1.3e-3 /
+  0.46**. Side flips: f32 1/8000 + 2 resolution mismatches (ulp and tab32:
+  0). Exceedance for f32: 5.1% at 1e-4, **1.1% at 1e-3**.
+- **The structural test passes**: the f32/ulp quantile offset on the
+  trefoil is flat at 28.2–28.4 log2 across q50–q99 — parallel curves, no
+  bends — i.e. F32 behaves as pure precision scaling of the same method,
+  with offset ≈ the 2^29 mantissa-width ratio. (Cube offsets 26.6–27.7 on
+  the entered subset; its bundle is mostly sky and single-passage.)
+- **Error factorization** (tab32 vs f32, trefoil): representation rounding
+  alone (F32 tables under F64 arithmetic) is ~⅓ of the f32 median
+  (8.7e-7 of 2.8e-6) with the same tail shape; F32 step arithmetic
+  multiplies ~3x on top. No arithmetic reordering can beat the tab32 curve
+  while tables are F32 — that is the representation floor.
+- **Passage count works as the boundary-distance ordinal**: trefoil f32
+  medians by truth passage count 5.2e-6 (p=1, n=4201) → 4.0e-5 (p=2,
+  n=728) → 2.0e-4 (p=3, n=207) — roughly ×8 per passage — and all three
+  side flips live at p ≥ 3. The ulp baseline shows the same amplification
+  from the other end: 1e-16 input noise reaches 2.4e-9 max — F64's own
+  undecidable band is merely thinner, not absent.
+- **Eyeball bar** (384×288 render pairs + diff images, both scenes):
+  indistinguishable by eye. The diff structure is exactly the theory's
+  picture — grayscale deviation on the knot silhouette ~1e-5, bright
+  filaments along the boundary between the two ambient images, and the
+  flipped pixels (cube 1/110592, trefoil 12/110592 = 0.011%) sitting *on*
+  those filaments.
+
+**Read.** F32 is accepted as the tracer arithmetic at the image standard
+that already picked RK4: renders indistinguishable, wrong-for-precision
+pixels ~1e-4 of the image concentrated where the F64-fallback flag was
+already planned (the same filaments are where F64's own chaotic shimmer
+lives — the ray-bundles item). The acceptance-aligned scalars to re-run as
+the port proceeds: side-flip rate + exceedance-at-1-mrad, by passage count
+(the cheap flag ordinal until Jacobi-field κ lands). The sweep also covers
+emit_ray/transport, so in-throat cameras go F32 the same way; reference.jl
+stays untouched as the F64 oracle. Remaining step-5 work is the wavefront
+restructure (+ depth binning, ~2x from 14b's divergence datum).
+
 ## 2026-07-14b — production christoffel straight on the GPU: Float64 loses to the CPU, Float32 matches it naive and beats every tabulation variant on accuracy
 
 **Motivation.** Kaarel's call for this session: before tabulating Γ (and

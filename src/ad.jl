@@ -9,7 +9,7 @@ primal(d::ForwardDiff.Dual) = primal(ForwardDiff.value(d)) # recurse: christoffe
 # convert to so they scale with the phase's precision instead of promoting it
 carrier(x) = typeof(primal(x))
 
-directional(f, x, v) = ForwardDiff.derivative(t -> f(x .+ t .* v), 0.0)
+directional(f, x, v) = ForwardDiff.derivative(t -> f(x .+ t .* v), zero(eltype(x))) # seed in x's eltype or the dual pass promotes everything to Float64
 
 # The two dual-pass primitives below must keep separate bodies: when one pass
 # runs inside another (jacobian_columns → collar → the surface pass), any

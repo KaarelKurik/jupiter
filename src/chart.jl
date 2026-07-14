@@ -135,7 +135,7 @@ end
 
 function view_phase_at_target(v, chart_valence, target_offset)
     central_angle = 2pi / chart_valence
-    s,c = sincos(-central_angle * target_offset)
+    s,c = sincos(carrier(v.pos[1])(-central_angle * target_offset)) # angle exact in Float64, one rounding in
     rotation = @SMatrix [
         c -s 0
         s c 0
