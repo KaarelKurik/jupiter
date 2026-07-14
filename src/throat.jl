@@ -3,10 +3,11 @@
 
 # Let's just make half-edges a thick concept, fuck it
 
-struct Surface
-    mesh::Mesh
-    chart_polys
-    packed_polys::Vector{Array{Float64, 3}} # fast evaluation form of chart_polys; [component, u-power+1, v-power+1]
+# storage-parametric (like Mesh) so a device-side view is still a Surface
+struct Surface{M, CP, PP}
+    mesh::M
+    chart_polys::CP # mathematical source of truth; nothing on device
+    packed_polys::PP # fast evaluation form of chart_polys; per vertex, [component, u-power+1, v-power+1]
 end
 
 Surface(mesh, chart_polys) = Surface(mesh, chart_polys, [pack_polys(ps) for ps in chart_polys])
@@ -58,32 +59,32 @@ end
 
 identity_placement() = Placement([1. 0 0; 0 1 0; 0 0 1], zeros(3))
 
-struct Throat
-    surface::Surface
+struct Throat{S}
+    surface::S
     params::ThroatParams
     placements::NTuple{2, Placement}
 end
 
 Throat(surface, params) = Throat(surface, params, (identity_placement(), identity_placement()))
 
-struct HalfThroat
-    throat::Throat
+struct HalfThroat{T}
+    throat::T
     side::Int # 1 or 2
 end
 
-struct Chart
-    half_throat::HalfThroat
-    half_edge_handle::HalfEdgeHandle
+struct Chart{H, E}
+    half_throat::H
+    half_edge_handle::E
 end
 
-struct SituatedPhase{P, V} # pos/vel parametric so the integrator's phases are fully typed
-    chart::Chart
+struct SituatedPhase{C, P, V} # pos/vel parametric so the integrator's phases are fully typed
+    chart::C
     pos::P
     vel::V
 end
 
-struct AmbientRay{P, V} # left through a mouth; pos/vel in the ambient flat space of half_throat's placement
-    half_throat::HalfThroat
+struct AmbientRay{H, P, V} # left through a mouth; pos/vel in the ambient flat space of half_throat's placement
+    half_throat::H
     pos::P
     vel::V
 end

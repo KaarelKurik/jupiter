@@ -1,8 +1,8 @@
 # renderer assembly: everything here lives in ambient flat spaces; the throat
 # interior is trace_geodesic's business
 
-struct Scene{MS <: NTuple{2, Mouth}, S} # one mouth per side for now; each side's ambient space is its own universe
-    throat::Throat
+struct Scene{T, MS <: NTuple{2, Mouth}, S} # one mouth per side for now; each side's ambient space is its own universe
+    throat::T
     mouths::MS # parametric so per-passage mouth dispatch stays static
     sky::S # sky(side, dir) -> rgb in [0,1]^3
 end
@@ -100,8 +100,8 @@ forward — any basis, same contract as Camera). Emitted rays are
 metric-normalized so the ray budget means the same thing for every pixel
 regardless of the frame's holonomy scale.
 """
-struct SituatedCamera{P, F}
-    chart::Chart
+struct SituatedCamera{C, P, F}
+    chart::C
     pos::P
     frame::F
     tan_half_fov::Float64

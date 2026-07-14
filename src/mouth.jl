@@ -75,8 +75,8 @@ function slab_test(node::BVHNode, origin, inv_dir, t_bound)
     tfar >= max(tnear, 0) && tnear <= t_bound
 end
 
-struct TessellatedMouth <: Mouth # tessellated d=0 surface of a half-throat
-    half_throat::HalfThroat
+struct TessellatedMouth{H} <: Mouth # tessellated d=0 surface of a half-throat
+    half_throat::H
     triangles::Vector{MouthTriangle}
     bvh::BVH
 end

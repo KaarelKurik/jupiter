@@ -1,5 +1,5 @@
-struct CatmullClarkRes
-    refined_mesh::Mesh
+struct CatmullClarkRes{M}
+    refined_mesh::M
     quarter_edge_map::Dict{NTuple{2, Int}, NTuple{2, Int}}
 end
 
@@ -49,7 +49,7 @@ function catmullclark(m::Mesh) # returns a new mesh, assumes closed input
     # for every half-edge in the original,
     # produce a half-edge in the new that is a shortening of the original,
     # hence "quarter edge"
-    quarter_edges = Dict()
+    quarter_edges = Dict{NTuple{2, Int}, NTuple{2, Int}}()
     for face in m.faces
         rim = facerim(face)
         for he in rim

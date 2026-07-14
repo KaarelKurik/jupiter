@@ -5,22 +5,24 @@
 # Dict is lookup-only, so no hash iteration order is ever observed — all
 # numbering and canonical-frame choices are deterministic by construction.
 # Half-edge id order: faces in order, slots ccw within each face.
-struct Mesh
-    vertices::Vector{Vector{Float64}}
-    faces::Vector{Vector{Int}} # ccw
-    vertex_neighbors::Vector{Vector{Int}}
-    he_tail::Vector{Int}
-    he_head::Vector{Int}
-    he_next::Vector{Int}
-    he_prev::Vector{Int}
-    he_twin::Vector{Int}
-    he_offset::Vector{Int} # ccw count from the tail vertex's canonical half-edge
-    vertex_he::Vector{Int} # canonical outgoing half-edge: (vertex, first neighbor)
-    vertex_valence::Vector{Int}
+# storage-parametric so a device-side view (flat tables as device arrays, the
+# ragged construction-only fields as nothing) is still a Mesh to every consumer
+struct Mesh{VV, FF, NN, IV}
+    vertices::VV # Vector{Vector{Float64}} on host
+    faces::FF # Vector{Vector{Int}}, ccw
+    vertex_neighbors::NN # Vector{Vector{Int}}
+    he_tail::IV # the flat tables: Vector{Int} on host, device arrays on device
+    he_head::IV
+    he_next::IV
+    he_prev::IV
+    he_twin::IV
+    he_offset::IV # ccw count from the tail vertex's canonical half-edge
+    vertex_he::IV # canonical outgoing half-edge: (vertex, first neighbor)
+    vertex_valence::IV
 end
 
-struct HalfEdgeHandle
-    mesh::Mesh
+struct HalfEdgeHandle{M}
+    mesh::M
     id::Int
 end
 
