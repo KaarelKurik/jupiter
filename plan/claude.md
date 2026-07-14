@@ -27,8 +27,9 @@ SUPER, the ad.jl dual pass compiles clean at 31–76x one CPU thread
 (measurements.md 2026-07-13b). No compilability wall in the AD core.
 Step 4 (tabulated Γ) probed 2026-07-14: architecture settled (exact-in-d
 pieces, seam-aligned sectors), 10–50x confirmed available, but achievable
-accuracy hinges on the corner-blend choice — fork documented in
-measurements.md 2026-07-14, kaarel to pick before implementation.
+accuracy hinges on the corner-blend choice; that widened into the full
+**Representation fork** section below (C⁴ blend vs manifold splines vs
+level-set) — kaarel picks before step-4 implementation resumes.
 Gallery: first_light, textured trefoil, cube first flythrough.
 
 ## Next candidates, kaarel picks the order
@@ -37,8 +38,9 @@ Gallery: first_light, textured trefoil, cube first flythrough.
   CPU-first groundwork aiming at mechanical device translation; tiering is a
   chain — GPU certified against production, production against reference,
   reference the sole oracle). Step 4: tabulated Γ developed on CPU against
-  reference — **probed 2026-07-14, implementation waiting on kaarel's blend
-  call** (measurements.md 2026-07-14): depth factors out of the tables
+  reference — **probed 2026-07-14, implementation waiting on the
+  representation fork** (see that section; kaarel leans C⁴ if YZ tabulation
+  proceeds; measurements.md 2026-07-14): depth factors out of the tables
   exactly (g_outer quadratic in d, blend scalar exact at runtime); lateral
   domain = seam-aligned per-wedge polar sectors + tiny Cartesian core; AD
   christoffel measured 26–32 µs vs ~1–4 µs estimated table eval, so the
@@ -89,6 +91,57 @@ Gallery: first_light, textured trefoil, cube first flythrough.
 - Multi-mouth ambient spaces need nearest-entry selection across mouths
   (enter_mouth would need to expose hit distance).
 
+## Representation fork (recorded 2026-07-14)
+
+The step-4 probes (measurements.md 2026-07-14) reduced tabulated-Γ accuracy
+to one question — the corner blend's smoothness class — and localized the
+hard points at irregular (valence ≠ 4) vertices. That reframes the
+representation choices; all plausible paths in one place, kaarel to pick:
+
+1. **Stay YZ + C⁴ corner blend** (kaarel's lean *if* tabulation on the
+   current representation proceeds). Nonic smootherstep corner blend: sector
+   fits reach ~1e-5 relative Γ at N=12–24; AD fallback discs cover the
+   irregular-vertex cores, where the polynomial blend composed with z^(n/4)
+   leaves a genuine fractional-power singularity (exp-flat is the mirror
+   image: flat-at-vertices, bad at seams, plateaus ~1e-3; C² worse than
+   both). Deliberate physics change: re-fit, re-baseline, gallery re-render.
+   The depth blend stays exp-flat forever (exact at runtime in the tables).
+2. **Manifold splines / affine atlas** (steps away from YZ; discussed
+   2026-07-14). Key mapping: their "extraordinary point" (affine structure
+   obstructed, cone defect ≠ 0) = our valence ≠ 4 vertex = exactly the
+   non-converging tabulation cores; the trefoil (knotted torus, χ=0,
+   valence-4-only) is the zero-extraordinary-point case and is precisely
+   where our probes showed everything converging. With affine transitions,
+   polynomials are transition-closed ⇒ **corner blending dies entirely**
+   (one global piecewise-polynomial spline, no partition of unity); Γ per
+   patch is closed-form rational-with-sqrt — tabulation likely unnecessary.
+   Design axis: EP count vs severity — Ricci-flow single-EP construction
+   (Gu–He–Qin, CAD 2008) concentrates the whole 4π genus-0 defect in one
+   savage point; mild π/2 cones at the 8 cube corners with rigid transitions
+   elsewhere + spline caps (Reif TURBS / Peters–Karčiauskas guided splines /
+   Prautzsch) is likely the numerically kinder variant. Migration cost:
+   fit.jl + wedge machinery + transitions replaced; steppers/transport/mouth
+   survive; reference migrates with it (certification across the change is
+   geometric, not baseline-diff).
+3. **Level-set throat** (kaarel's preferred endpoint if a good rep existed):
+   fit smooth implicit φ, g = A(φ)(I − n̂n̂ᵀ) + B(φ)n̂n̂ᵀ in one global ambient
+   chart; no atlas, no transitions, no collar caustics. Requirements from
+   kaarel's past failed searches: cheap eval, cheap precompute, good
+   locality, respects mesh topology (no metaball-style merging/pathology).
+   Hard constraint from the physics: Γ needs the Hessian of φ, so φ must be
+   ~C³ for well-behaved geodesics. Candidates: (a) **superfrusta +
+   metaballs** (kaarel 2026-07-14): ResFit decomposition of the throat into
+   analytic 8-parameter primitives (arXiv 2512.09201, CVPR 2026), log-sum-exp
+   smooth union (analytic — the union is not the weak point); open question
+   is the primitive's own creases ("differentiable a.e.") vs the C³ need —
+   confine or smooth them. (b) polygon-soup IMLS over a dense CC-limit
+   sampling: C^∞, local via BVH, no global solve, topology-faithful at small
+   kernels; eval cost ~ current blend arithmetic. (c) compactly-supported
+   HRBF: banded solve precompute, C^k, locality by kernel support.
+4. **Orthogonal regardless of path**: per-chart step-size discipline
+   (h=0.05 ≈ half a face on the trefoil drives the huge stage-excursion
+   margins); wavefront/GPU port structure (steps 1–3) survives every option.
+
 ## Performance roadmap (2026-07-11 discussion)
 
 Known remaining costs (allocation is done — see 2026-07-12 log): `metric`
@@ -124,15 +177,9 @@ leverage:
   Float64 fallback for flagged pixels. Wavefront-style ray compaction for
   divergence. Port the winning algorithm (likely tabulated Γ), not the
   current loop.
-- **Representation alternatives** (research fork): Prautzsch freeform splines /
-  Reif TURBS / Peters–Karčiauskas guided splines give C^k with finite
-  polynomial patches (no transcendental blends — cheaper derivatives,
-  GPU-native, fiddlier construction); YZ is the canonical manifold-based
-  choice, and valence-4-only meshes nearly degenerate its transcendental part
-  anyway. More radical: **level-set throat** — fit a smooth implicit φ and
-  define g = A(φ)(I − n̂n̂ᵀ) + B(φ)n̂n̂ᵀ in one global ambient chart; no atlas,
-  no transitions, no collar caustics; a different but arguably more natural
-  wormhole; current machinery would remain as the physics reference.
+- **Representation alternatives** (research fork): see the dedicated
+  "Representation fork" section below (consolidated 2026-07-14 after the
+  step-4 tabulation probes made the irregular-vertex/blend problem concrete).
 
 ## Current architecture (post-redesign)
 
