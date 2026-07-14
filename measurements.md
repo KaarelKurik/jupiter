@@ -4,6 +4,91 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-14 — tabulated Γ (GPU step 4) probed: depth factors out exactly; lateral convergence is blend-limited, and the two blends fail in complementary places
+
+**Motivation.** Step 4 planned "Chebyshev-tabulated Γ per face×depth box
+(~8³ coeffs/component) … geometric convergence for a C^∞ metric, likely
+10–50x per step". Before implementing: measure where integrator stages
+actually evaluate Γ, and what Chebyshev convergence the blended metric really
+delivers. Face-coordinate tables were rejected on paper first: face coords
+are z^(4/n)-singular at irregular corners, while chart coords are smooth by
+construction — so tables live in chart coords.
+
+**Method.** Four probe rounds (scratchpad, disposable). (1) A recording env
+(`christoffel(env::Recorder, v)` delegating to the AD path — the env slot is
+a clean dispatch extension point) traced the physics_diff bundles and logged
+per-eval wedge-square coords and depth. (2–4) Tensor-Chebyshev fits
+(first-kind nodes, hand-rolled DCT + series-derivative recurrence) of Γ and
+of exact-in-d metric pieces, on wedge-aligned domains; end-to-end assembled-Γ
+error vs the AD christoffel on the needed region; a blend-parametrized local
+copy of the surface→metric→Γ pipeline (reference-style ForwardDiff, verified
+4.4e-16 against production) to compare corner blends; tiny-interior-box
+anchor test (collapses to g~1e-14/Γ~1e-12, validating the pipeline — a
+round-2 "anchor" that spanned the full wedge angle failed at 0.75 and was
+meaningless, not a bug).
+
+**Findings.**
+
+- **Stage excursions are large; tables need margins + an AD fallback.**
+  Settled phases live in st ∈ [0,1/2]², d ∈ [0, td], but RK/DP stages
+  evaluate beyond: cube maxst q99/max 0.51/0.53, d ∈ [−0.036, 0.79]; trefoil
+  maxst q99/max 0.80/1.12 with 19% of evals past 0.5 (fixed h=0.05 ≈ half a
+  face on that mesh), d ∈ [−0.048, 0.35]. Rays genuinely dip to d<0 with
+  inward velocity before `exits_mouth` triggers.
+- **Depth is exactly solved, no approximation needed**: g_outer(u,v,d) is
+  exactly quadratic in d (collar = s − d·n̂ ⇒ JᵀJ degree 2; residual 6e-16),
+  g_inner is d-independent, and the depth blend w(d/cyl) with its flat ends
+  reproduces the outer/inner branch structure of `metric` exactly (residual
+  3e-16, including d<0 and d>cyl). So tabulate 2D lateral pieces A,B,C,im
+  with g = w·(A+Bd+Cd²)+(1−w)·im and ∂_d g = w′·(om−im)+w·(B+2Cd); w, w′
+  evaluated exactly at runtime. The depth blend never needs to change and
+  never enters the approximation error.
+- **Naive boxes fail; seam-aligned polar sectors are the right lateral
+  domain.** Wedge-frame bounding boxes straddle the corner-blend seam rays
+  and barely converge (cube Γ rel error 0.28→0.12 from N=6→20). Per-wedge
+  (r,φ) sectors put seams and chart center on box edges; a small Cartesian
+  core box avoids the 1/r series-derivative blowup at the center. Also the
+  partition of unity dies outside the face ring (0/0), so domains must stay
+  inside st ≲ 1 — box validity is a hard constraint, checked at fit nodes.
+- **Convergence under the production exp-flat corner blend plateaus at
+  ~1e-3 relative Γ.** Trefoil (n=4, wedge maps trivial): rel 2.8e-4 at N=24
+  single sector. Whole-mesh at feasible N: q50 per-chart Γsup 3.3e-3 (N=8) /
+  1.7e-3 (N=12), zero charts below 1e-4, 0.84/1.9 GB uniform. Cube (n=3):
+  sectors stuck at ~0.013 sup even at N=24; the exp-flat *core* however
+  converges cleanly when refined (1.2e-6 at Ncore=32, rc=0.05R — exp-flat is
+  flat to all orders at the vertex).
+- **A C⁴ polynomial corner blend (nonic smootherstep) flips the picture.**
+  Cube sectors collapse 1000x to 1.2e-5 at N=24; trefoil reaches rel 8.4e-5
+  (N=16) / 2.1e-5 (N=24) and still dropping steeply. But at irregular
+  vertices its core stops converging (~6e-3 sup, insensitive to rc: the
+  polynomial blend composed with the z^(n/4) wedge coords leaves a genuine
+  fractional-power singularity at the vertex, where exp-flat was flat).
+  Complementary failure modes: exp-flat is bad at seams / good at centers;
+  polynomial is good at seams / bad at irregular centers. A C² blend
+  (quintic) is strictly worse than both for Γ (needs ∂g ⇒ only C¹; rel
+  errors 0.2–0.9, non-converging) — C⁴ is the minimum interesting order.
+- **The AD christoffel costs 26–32 µs/eval warm** (cube/trefoil, single
+  thread) — it dominates ray cost (4 evals/RK4 step, 7/DP5 attempt).
+  Estimated table eval (values + derivatives via Clenshaw from one 24×N²
+  coefficient set, N=8–12, plus ~300 flop Γ assembly) is ~1–4 µs: the
+  roadmap's 10–50x per-step stands *if* the accuracy question is settled.
+  Derivative tables need not be stored (evaluate d/du series from value
+  coefficients), so memory is 24·N²·8B per wedge ≈ 12–28 kB.
+
+**Conclusions.** Tabulation is worth it (26–32 µs → ~1–4 µs per Γ), the
+exact-in-d factorization + seam-aligned sectors + tiny-core-AD-fallback is
+the right architecture, and accuracy is decided by the corner blend, which
+plan/claude.md records as "placeholder pending a deliberate choice":
+
+- Keep exp-flat ⇒ tables certify at ~1e-3 relative Γ (visually sub-pixel-ish,
+  but a real tolerance downgrade in the reference chain).
+- Adopt a C⁴ polynomial corner blend ⇒ ~1e-5 relative Γ at N=12–24 with AD
+  fallback inside r < ~0.1R of irregular vertices (regular-vertex meshes like
+  the trefoil have no hard cores at all). This is a deliberate physics change:
+  surface geometry shifts subtly, all baselines re-save, galleries re-render.
+- Orthogonal lever either way: per-chart step-size discipline (h=0.05 is half
+  a face on the trefoil) would shrink the needed margins and every error above.
+
 ## 2026-07-13c — de-pinning hash iteration order from mesh construction: the slack is ~1e-13/e-10, within budget
 
 **Motivation.** Step 1 below froze Dict hash-iteration order as implicit

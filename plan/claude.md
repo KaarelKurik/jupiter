@@ -25,6 +25,10 @@ id-indexed arrays, the mouth is isbits with a threaded (stackless) BVH, and
 the device smoke test passed — eval_packed bit-identical on the RTX 4070
 SUPER, the ad.jl dual pass compiles clean at 31–76x one CPU thread
 (measurements.md 2026-07-13b). No compilability wall in the AD core.
+Step 4 (tabulated Γ) probed 2026-07-14: architecture settled (exact-in-d
+pieces, seam-aligned sectors), 10–50x confirmed available, but achievable
+accuracy hinges on the corner-blend choice — fork documented in
+measurements.md 2026-07-14, kaarel to pick before implementation.
 Gallery: first_light, textured trefoil, cube first flythrough.
 
 ## Next candidates, kaarel picks the order
@@ -33,8 +37,16 @@ Gallery: first_light, textured trefoil, cube first flythrough.
   CPU-first groundwork aiming at mechanical device translation; tiering is a
   chain — GPU certified against production, production against reference,
   reference the sole oracle). Step 4: tabulated Γ developed on CPU against
-  reference (port the winning algorithm, not the current loop — see the
-  roadmap bullet below). Step 5: the real port — device throat view
+  reference — **probed 2026-07-14, implementation waiting on kaarel's blend
+  call** (measurements.md 2026-07-14): depth factors out of the tables
+  exactly (g_outer quadratic in d, blend scalar exact at runtime); lateral
+  domain = seam-aligned per-wedge polar sectors + tiny Cartesian core; AD
+  christoffel measured 26–32 µs vs ~1–4 µs estimated table eval, so the
+  10–50x holds — but accuracy is corner-blend-limited: exp-flat plateaus at
+  ~1e-3 relative Γ, a C⁴ polynomial blend reaches ~1e-5 (with AD fallback at
+  irregular-vertex cores) at the cost of a deliberate physics change
+  (re-fit/re-baseline/gallery re-render). C² blends are worse than both.
+  Step 5: the real port — device throat view
   (packed_polys still Vector{Array}, needs one padded/offset array), wavefront
   restructure of the passage loop (kernels can't heap-allocate the per-passage
   sum-type boxes), Float32 policy measured against Float64-on-device.
