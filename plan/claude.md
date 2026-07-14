@@ -2,10 +2,10 @@
 
 Companion to kaarel's journal (`plan/kaarel.md`); holds current state, the
 roadmap, and standing conventions. Dated session records live alongside as
-`plan/YYYY-MM-DD.md`. Last updated 2026-07-14 (second session). **This file
+`plan/YYYY-MM-DD.md`. Last updated 2026-07-14 (third session). **This file
 is the resume point** — read it plus `jj log` before touching code.
 
-## Where we are (2026-07-14, second session)
+## Where we are (2026-07-14, third session)
 
 The POC pipeline is complete end-to-end and now includes cameras *in and
 through* the wormhole: fitted YZ surface → blending → throat metric →
@@ -39,8 +39,18 @@ the multicore CPU (5.5x one thread ≈ 1/3 of 16); **Float32 is the road**:
 floor), and Γ accuracy vs F64 truth (median 9.5e-7, max 1.1e-5 sup-relative)
 **beats every tabulation variant at exact blend semantics — the
 representation fork no longer gates the GPU port** (measurements.md
-2026-07-14b). Christoffel path is eltype-honest (carrier() in ad.jl);
-steppers/transitions still carry F64 literals.
+2026-07-14b). Third session: eltype-honesty extended to the whole trace
+path (steppers, dopri tableau, settle/transitions, mouth exit, emit_ray —
+F64 certified bit-identical again) and **F32 judged end-to-end and
+accepted** by kaarel's decomposition metric (measurements.md 2026-07-14c):
+quantile curves parallel to the F64 1-ulp baseline at offset ≈ 2^28 ("just
+rounding", no pathology bends), side flips 0/8000 cube and 1/8000 trefoil
+concentrated at passage ≥ 3, exceedance-at-1-mrad 0.04%/1.1%, F32/F64
+render pairs indistinguishable with the diff living exactly on the
+two-image boundary filaments. `scripts/precision_diff.jl` is the standing
+acceptance instrument (physics_diff's sibling); mouth entry stays an F64
+solve, exits convert at to_ambient. Wavefront restructure is the remaining
+step-5 blocker.
 Gallery: first_light, textured trefoil, cube first flythrough.
 
 ## Next candidates, kaarel picks the order
@@ -57,26 +67,17 @@ Gallery: first_light, textured trefoil, cube first flythrough.
   Float32 out-accuracies the tables (median 9.5e-7 sup-rel) at exact blend
   semantics and ≈ full-CPU speed naive. Tabulation remains a CPU-side
   option gated on the representation fork. Step 5: the rest of the real
-  port, in order of what today's floor says matters — wavefront restructure
-  of the passage loop (kernels can't heap-allocate the per-passage sum-type
-  boxes; depth-bin rays while at it: divergence costs ~2.3x today),
-  eltype-honesty extended past christoffel (steppers/settle/transitions
-  still carry F64 literals) so F32 traces exist to judge. Judging them
-  (kaarel 2026-07-14b): **not sup exit-map error** — the exit map
-  image→(side, ray) is discontinuous across the limit-cycle boundary, so
-  worst-case error is unbounded a priori for *any* method; measure instead
-  the physics_diff decomposition — side-flip rate F32-vs-F64 (size of the
-  undecidable band), deviation conditional on side agreement — plus
-  eyeballed F32/F64 render pairs as the acceptance bar (image accuracy is
-  the standard that already picked RK4). Conditional-deviation aggregates
-  (discussed 2026-07-14b): the conditional tail is power-law (deviation ~
-  ε·κ, κ ~ r^(−λ/λ′) near the boundary), so the *mean* may not exist —
-  use quantiles / log-mean / exceedance fraction at a sub-pixel threshold
-  (the acceptance-aligned scalar); the structural test is quantile-curve
-  parallelism against an F64 1-ulp noise baseline (offset ~2^29 = "just
-  rounding", bends = pathology); the endgame is Jacobi-field κ
-  normalization (same infrastructure as ray bundles + the F64-fallback
-  pixel flag), with passage-count binning as the cheap pre-Jacobi proxy. Register pressure: the named
+  port — **eltype-honesty + F32 judgment DONE 2026-07-14c** (whole trace
+  path carrier-honest, F64 bit-identical; F32 accepted end-to-end by the
+  decomposition metric kaarel specified 14b — quantile parallelism vs the
+  1-ulp baseline at ≈2^28, undecidable band ~1e-4 of pixels at passage ≥ 3
+  on the boundary filaments, render pairs indistinguishable; instrument:
+  scripts/precision_diff.jl, findings measurements.md 2026-07-14c; the
+  F64-fallback flag ordinal until Jacobi-field κ lands is passage count,
+  and the endgame remains Jacobi normalization — same infrastructure as
+  ray bundles). Remaining: **wavefront restructure** of the passage loop
+  (kernels can't heap-allocate the per-passage sum-type boxes; depth-bin
+  rays while at it: divergence costs ~2.3x today). Register pressure: the named
   lever is **hand-rolled derivatives in production, AD stays in reference
   as the oracle** (kaarel 2026-07-14b) — the 27KB/thread F32 spill is dual
   bloat (48 carrier floats per scalar, mostly structural zeros); Γ needs
