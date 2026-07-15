@@ -2,10 +2,10 @@
 
 Companion to kaarel's journal (`plan/kaarel.md`); holds current state, the
 roadmap, and standing conventions. Dated session records live alongside as
-`plan/YYYY-MM-DD.md`. Last updated 2026-07-14 (third session). **This file
+`plan/YYYY-MM-DD.md`. Last updated 2026-07-14 (fourth session). **This file
 is the resume point** — read it plus `jj log` before touching code.
 
-## Where we are (2026-07-14, third session)
+## Where we are (2026-07-14, fourth session)
 
 The POC pipeline is complete end-to-end and now includes cameras *in and
 through* the wormhole: fitted YZ surface → blending → throat metric →
@@ -49,8 +49,18 @@ concentrated at passage ≥ 3, exceedance-at-1-mrad 0.04%/1.1%, F32/F64
 render pairs indistinguishable with the diff living exactly on the
 two-image boundary filaments. `scripts/precision_diff.jl` is the standing
 acceptance instrument (physics_diff's sibling); mouth entry stays an F64
-solve, exits convert at to_ambient. Wavefront restructure is the remaining
-step-5 blocker.
+solve, exits convert at to_ambient. Fourth session: the **wavefront
+restructure landed** (src/wavefront.jl, measurements.md 2026-07-14d) — the
+passage loop's sum-type boxes became a stage tag on one isbits
+WavefrontRay{T} record; sweep_ray is the kernel-shaped body (0 B, both
+integrators, resumable across sweeps), mouth entry the host-side F64 stage,
+the driver sweep→compact→entry rounds with optional depth-branch binning.
+Certified bit-identical to render_raymap (289 tests cold, physics_diff
+0.0), and the staged CPU driver came out ~1.6x *faster* than the recursive
+renderer (self-load-balancing active list vs row threading). Step 5's
+remainder is now the device tracer kernel itself: sweep_ray + settle/
+transition/to_ambient in-kernel on the Adapt-ed throat (gpu_christoffel.jl
+scaffolding), host entry stage, then the register-pressure lever.
 Gallery: first_light, textured trefoil, cube first flythrough.
 
 ## Next candidates, kaarel picks the order
@@ -75,9 +85,14 @@ Gallery: first_light, textured trefoil, cube first flythrough.
   scripts/precision_diff.jl, findings measurements.md 2026-07-14c; the
   F64-fallback flag ordinal until Jacobi-field κ lands is passage count,
   and the endgame remains Jacobi normalization — same infrastructure as
-  ray bundles). Remaining: **wavefront restructure** of the passage loop
-  (kernels can't heap-allocate the per-passage sum-type boxes; depth-bin
-  rays while at it: divergence costs ~2.3x today). Register pressure: the named
+  ray bundles). **Wavefront restructure DONE 2026-07-14d** (src/wavefront.jl:
+  isbits WavefrontRay{T} stage-tagged records, sweep_ray the box-free kernel
+  body, host F64 entry stage, depth-branch binning plumbed; bit-identical to
+  render_raymap, ~1.6x faster on CPU for free). Remaining: **the device
+  tracer kernel** — sweep_ray + settle/transitions/to_ambient in-kernel on
+  the Adapt-ed throat, entry solves staying host-side, wavefront_raymap
+  growing a device driver (promote gpu_christoffel.jl's PackedTable/adapt
+  rules to a gpu/ module when it lands). Register pressure: the named
   lever is **hand-rolled derivatives in production, AD stays in reference
   as the oracle** (kaarel 2026-07-14b) — the 27KB/thread F32 spill is dual
   bloat (48 carrier floats per scalar, mostly structural zeros); Γ needs
