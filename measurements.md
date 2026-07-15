@@ -4,6 +4,80 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-14e — the device tracer kernel runs and is correct (0 flips, 85% of F64 rays bit-identical); naive throughput loses to the CPU ~5-8x, and the gate is spill, exactly where 14b pointed
+
+**What ran** (scripts/gpu_tracer.jl; gpu/jupitergpu.jl is the promoted
+module — PackedTable/adapt/device_throat moved out of gpu_christoffel.jl,
+which was re-verified after the dedup). `sweep_ray` executes in-kernel
+*unmodified* — settled RK4/dopri attempts, chart hops, half transitions,
+to_ambient exits — one thread per ray over `WavefrontRay` records, inside
+the same run_wavefront! driver the CPU uses with only the sweep stage
+swapped (jupitergpu.DeviceSweep: gather active records → launch → scatter).
+Cube scene, 192×144, RayBudget(0.05, 400, 4), RTX 4070 SUPER.
+
+**Correctness — the tiering holds on device.** Zero side flips and zero
+resolution mismatches in 27,648 rays for all three comparisons. F64 device
+vs F64 CPU wavefront: 23,580/27,639 rays **bit-identical end-to-end**
+through hundreds of steps; the rest deviate by transcendental-intrinsic
+ulps only (angle q99 3.1e-15, max 2.9e-12 rad — CUDA's sincos/atan/pow are
+not bit-equal to glibc's). F32 device vs F32 CPU: q99 1.5e-6, max 3.1e-3
+rad (one near-boundary ray amplified, the 14c picture). F32 device vs F64
+truth: q99 1.4e-6, max 1.4e-2 — mirrors 14c's acceptance data. Since the
+device runs the same production sweep_ray that is bit-identical to the
+recursive tracer, which physics_diff certifies against reference, the
+oracle chain reaches the card.
+
+**Throughput — the honest number.** Wall seconds (kernel-only ≈ wall, so
+host entry solves + transfers + compaction are *negligible* — the wavefront
+split is structurally right):
+
+    recursive cpu (16 thr)      1.93
+    wavefront cpu F64           1.21
+    wavefront cpu F32           1.09
+    device F64  best (sweep=256, bin)   16.2
+    device F32  best (sweep=16, bin)     8.35
+    device F32  sweep=64 bin/nobin      12.4 / 14.4
+
+Naive device F32 is ~7.7x *slower* than the 16-thread CPU wavefront.
+Binning is worth ~15% at sweep=64; sweep granularity moves things ~30%
+non-monotonically (scheduling noise, not read into). F64 is only ~2x F32
+on a 1:64-FP64 card — confirmation the kernel is **spill-bound, not
+FLOP-bound**: 255 registers with 68.9KB (F64) / 42.5KB (F32) local
+bytes/thread, up from 52K/27K for bare christoffel (integrator state on
+top of nested-dual bloat).
+
+**Why-chain, and why this was predictable.** 14b already said bare F32
+christoffel naive ≈ break-even with the full CPU *at 200k-point
+parallelism*. The tracer kernel is worse on both factors: ~1.6x more spill
+per thread, and a 192×144 image supplies only 27.6k rays — shrinking as
+compaction retires them — which cannot hide local-memory latency. The gate
+is per-thread local traffic, so the ranked levers are: (1) **hand-rolled
+closed-form derivatives in production** (the named register lever — each
+nested-dual scalar hauls 48 carrier floats, mostly structural zeros;
+s..∂³s through polynomial∘wedge∘blend is closed-form), (2) more rays in
+flight (frame batches / bigger tiles — the fly-through use case supplies
+them naturally), (3) persistent-thread scheduling. The port is
+functionally complete; the remaining work is arithmetic density, not
+structure.
+
+**Addendum — resolution scaling (kaarel's question: doesn't more rays =
+higher resolution too? Yes, measured).** Device F32 (sweep=16, bin) per-ray
+wall time vs CPU wavefront F32, same scene/budget:
+
+    96x72     6,912 rays   848 µs/ray   19.4x behind cpu
+    192x144  27,648 rays   285 µs/ray    7.3x behind cpu
+    384x288 110,592 rays   109 µs/ray    2.8x behind cpu (still improving)
+
+The 255-regs-→-one-256-thread-block-per-SM arithmetic suggested saturation
+near 14k rays (2 waves of 108 blocks over 56 SMs); the data refutes that —
+wave quantization plus compaction-shrunk tail rounds leave SMs idle far
+past nominal fill, and per-ray cost is still dropping at 110k rays. So
+parallelism starvation is a real, resolution-curable chunk of the gap: at
+production sizes the naive kernel is already only ~3x behind the CPU, and
+frame batching (pool records are flat — batching frames is just a bigger
+pool with a frame id) buys the same without touching resolution. The
+CPU's per-ray cost is flat (~39-44 µs/ray) across the sweep, as expected.
+
 ## 2026-07-14d — wavefront restructure certified bit-identical, and the staged CPU driver is ~1.6x the recursive renderer for free
 
 **Motivation.** Step 5's remaining blocker: the passage loop's sum-type

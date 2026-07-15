@@ -13,47 +13,10 @@
 
 using jupiter
 using CUDA
-using Adapt
+include(joinpath(@__DIR__, "..", "gpu", "jupitergpu.jl")) # PackedTable/adapt/device_throat live there now
+using .jupitergpu
 const J = jupiter
-
-# device-facing packed_polys: every chart padded to a common size in one 4D
-# array; getindex returns the [component, u-power, v-power] slice eval_packed
-# expects. Adapt rules for jupiter types live here until a gpu/ module earns
-# its keep.
-struct PackedTable{A}
-    a::A
-end
-Base.getindex(p::PackedTable, v::Int) = view(p.a, :, :, :, v)
-
-function PackedTable(polys::Vector{Array{Float64, 3}})
-    du = maximum(size.(polys, 2))
-    dv = maximum(size.(polys, 3))
-    a = zeros(3, du, dv, length(polys))
-    for (v, p) in enumerate(polys)
-        a[:, 1:size(p, 2), 1:size(p, 3), v] = p
-    end
-    PackedTable(a)
-end
-
-Adapt.@adapt_structure PackedTable
-Adapt.@adapt_structure J.Mesh
-Adapt.@adapt_structure J.Surface
-Adapt.@adapt_structure J.Throat
-
-# host-side device view: flat tables as CuArrays, host-only fields dropped;
-# @cuda's cudaconvert recurses through the adapt rules above at launch.
-# T picks the on-device scalar type; the eltype-honest christoffel path then
-# computes wholly in T because the phase and the packed table carry it.
-function device_throat(th::J.Throat, T)
-    m = J.mesh(J.geometry(th))
-    dmesh = J.Mesh(nothing, nothing, nothing,
-                   (CuArray(getfield(m, f)) for f in
-                    (:he_tail, :he_head, :he_next, :he_prev, :he_twin,
-                     :he_offset, :vertex_he, :vertex_valence))...)
-    padded = PackedTable(J.packed_polys(J.geometry(th)))
-    dsurf = J.Surface(dmesh, nothing, PackedTable(CuArray(T.(padded.a))))
-    J.Throat(dsurf, J.params(th), th.placements)
-end
+const G = jupitergpu
 
 function kernel_christoffel(out, throat, hes, poss)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
@@ -112,7 +75,7 @@ function main()
     println("cpu 1 thread: ", round(tc / nsub * 1e6, digits = 2), " µs/eval (truth on $nsub points)")
 
     for T in (Float64, Float32)
-        dth = device_throat(th, T)
+        dth = G.device_throat(th, T)
         d_poss = CuArray(T.(poss))
         d_out = CUDA.zeros(T, 27, npoints)
 

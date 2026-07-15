@@ -112,19 +112,29 @@ function depth_branch(throat, r::WavefrontRay) # the metric's three-way branch, 
 end
 
 """
+default sweep stage: sweep_ray over the active records on host threads. Any
+callable with this signature can stand in (the gpu module's DeviceSweep
+launches the same records through the kernel instead).
+"""
+function threaded_sweep!(pool, active, env, throat, budget, sweep)
+    Threads.@threads for n in 1:length(active)
+        k = active[n]
+        pool[k] = sweep_ray(env, throat, budget, pool[k], sweep)
+    end
+end
+
+"""
 drive the pool to completion: sweep the active in-throat rays, route mouth
 exits through the entry stage, drop finished rays from the lists. `bin`
 groups the active list by depth branch before each sweep — the device
 divergence lever; on the CPU it only permutes an order no result depends on.
 """
-function run_wavefront!(raymap, pool, active, env, scene, budget, width, sweep, bin)
+function run_wavefront!(raymap, pool, active, env, scene, budget, width, sweep, bin,
+                        sweep_stage! = threaded_sweep!)
     pending = Int32[]
     while !isempty(active)
         bin && sort!(active, by = k -> depth_branch(scene.throat, pool[k]))
-        Threads.@threads for n in 1:length(active)
-            k = active[n]
-            pool[k] = sweep_ray(env, scene.throat, budget, pool[k], sweep)
-        end
+        sweep_stage!(pool, active, env, scene.throat, budget, sweep)
         empty!(pending)
         keep = 0
         for k in active
@@ -160,7 +170,8 @@ F64); `sweep` is the per-launch attempt granularity, `bin` the depth-branch
 grouping — both scheduling-only.
 """
 function wavefront_raymap(env, scene, budget, camera::Camera, cam_side::Int, width::Int, height::Int;
-                          T::Type = Float64, sweep::Int = 64, bin::Bool = false)
+                          T::Type = Float64, sweep::Int = 64, bin::Bool = false,
+                          sweep_stage! = threaded_sweep!)
     raymap = RayMap(zeros(Int, width, height), zeros(3, width, height), zeros(3, width, height))
     pool = Vector{WavefrontRay{T}}(undef, width * height)
     cam_space = HalfThroat(scene.throat, cam_side)
@@ -179,7 +190,7 @@ function wavefront_raymap(env, scene, budget, camera::Camera, cam_side::Int, wid
         end
     end
     active = Int32[k for k in 1:length(pool) if pool[k].stage == RAY_THROAT]
-    run_wavefront!(raymap, pool, active, env, scene, budget, width, sweep, bin)
+    run_wavefront!(raymap, pool, active, env, scene, budget, width, sweep, bin, sweep_stage!)
     raymap
 end
 
@@ -189,7 +200,8 @@ passage-0 in-throat record (emitted phase converted to T), so exits feed the
 usual entry rounds with the full passage budget — trace_ray's situated shape.
 """
 function wavefront_raymap(env, scene, budget, camera::SituatedCamera, width::Int, height::Int;
-                          T::Type = Float64, sweep::Int = 64, bin::Bool = false)
+                          T::Type = Float64, sweep::Int = 64, bin::Bool = false,
+                          sweep_stage! = threaded_sweep!)
     raymap = RayMap(zeros(Int, width, height), zeros(3, width, height), zeros(3, width, height))
     pool = Vector{WavefrontRay{T}}(undef, width * height)
     Threads.@threads for k in 1:length(pool)
@@ -198,6 +210,6 @@ function wavefront_raymap(env, scene, budget, camera::SituatedCamera, width::Int
         pool[k] = throat_record(T, camera_ray(env, camera, x, y), Int32(0), budget)
     end
     active = Int32[Int32(k) for k in 1:length(pool)]
-    run_wavefront!(raymap, pool, active, env, scene, budget, width, sweep, bin)
+    run_wavefront!(raymap, pool, active, env, scene, budget, width, sweep, bin, sweep_stage!)
     raymap
 end
