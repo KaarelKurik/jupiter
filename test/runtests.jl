@@ -278,6 +278,42 @@ end
     @test all(0 .<= img2 .<= 1)
 end
 
+@testset "wavefront tracer ≡ recursive tracer" begin
+    mouth2 = J.TessellatedMouth(nothing, J.HalfThroat(th, 2), 8)
+    scene = J.Scene(th, (mouth, mouth2), J.checker_sky)
+    cam = J.look_at_camera([0.9, -2.8, 0.9], zeros(3), [0.0, 0.0, 1.0], pi / 3)
+    w, h = 16, 12
+    same(a, b) = a.side == b.side && a.pos == b.pos && a.vel == b.vel
+    # RK4, a starved budget (exercises out-of-steps and out-of-passages), and
+    # dopri (adaptive h persisted across sweeps), each bit-identical at every
+    # sweep granularity and under depth-branch binning
+    for budget in (J.RayBudget(0.05, 400, 4), J.RayBudget(0.05, 60, 2),
+                   J.RayBudget(0.05, 400, 4, 1e-8))
+        rm = J.render_raymap(nothing, scene, budget, cam, 1, w, h)
+        for (sweep, bin) in ((64, false), (7, true), (1, false))
+            @test same(rm, J.wavefront_raymap(nothing, scene, budget, cam, 1, w, h; sweep, bin))
+        end
+    end
+    # camera inside the throat: the passage-0 initial segment
+    scam = J.SituatedCamera(c, J.SVector(0.2, 0.15, 0.3),
+                            J.SMatrix{3, 3, Float64}([1.0 0 0; 0 1 0; 0 0 1]), tan(pi / 6))
+    budget = J.RayBudget(0.05, 400, 4)
+    @test same(J.render_raymap(nothing, scene, budget, scam, w, h),
+               J.wavefront_raymap(nothing, scene, budget, scam, w, h; sweep = 32))
+    # the kernel body stays heap-free in both integrator modes
+    r0 = J.WavefrontRay{Float64}(J.RAY_THROAT, Int8(1), Int32(J.mesh(surf).vertex_he[1]),
+                                 Int32(1), Int32(0), 0.05,
+                                 J.SVector(0.1, 0.05, 0.2), J.SVector(0.05, 0.02, 0.4))
+    allocs(th_, b, r_) = # args, not captured globals: the measurement needs a function barrier
+        (J.sweep_ray(nothing, th_, b, r_, 8); @allocated J.sweep_ray(nothing, th_, b, r_, 8))
+    @test allocs(th, J.RayBudget(0.05, 400, 4), r0) == 0
+    @test allocs(th, J.RayBudget(0.05, 400, 4, 1e-8), r0) == 0
+    # Float32 pool records exist and trace (agreement is precision_diff's business)
+    wm32 = J.wavefront_raymap(nothing, scene, budget, cam, 1, 8, 6; T = Float32, sweep = 16)
+    @test all(s -> s in (0, 1, 2), wm32.side)
+    @test any(!=(0), wm32.side)
+end
+
 @testset "textured sky" begin
     # save_ppm -> load_ppm round trip is exact after 8-bit quantization
     img = zeros(3, 7, 5)

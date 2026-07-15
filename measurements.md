@@ -4,6 +4,48 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-14d — wavefront restructure certified bit-identical, and the staged CPU driver is ~1.6x the recursive renderer for free
+
+**Motivation.** Step 5's remaining blocker: the passage loop's sum-type
+returns (`Union{Nothing, AmbientRay}` from trace_ray, `Union{SituatedPhase,
+AmbientRay}` from trace_geodesic) heap-box on every passage and cannot exist
+in a kernel; divergence wants rays grouped by depth branch (~2.3x,
+2026-07-14). The restructure had to be certifiable as pure control-flow
+surgery: same per-ray operation sequence, F64 bit-identical.
+
+**Shape** (src/wavefront.jl). One isbits `WavefrontRay{T}` record — stage
+tag (in-throat / at-entry / escaped / unresolved) + side, chart handle id,
+passage and step counters, dopri's adaptive h, pos, vel. `sweep_ray` is the
+kernel body: up to K settled integrator attempts in the ray's own precision,
+replicating both trace_geodesic loops op-for-op (settle → exit-check order,
+dopri's cap/accept/h-update order, exact carrier conversions), resumable
+across sweeps because h and the attempt count live in the record. Mouth
+entry stays a host-side F64 stage (the seam precision_diff certified;
+passage budget charged there, reproducing trace_ray's exits-on-last-passage
+shape). Driver: pool parallel to pixels, active-index list, sweep → compact
+→ entry rounds; `bin` sorts the active list by the metric's three-way depth
+branch — scheduling-only on CPU, the divergence lever on device. The
+initial camera ray never lives in a T record, so its first entry solve sees
+full F64; all later T→F64→T round trips are exact embeddings.
+
+**Certification.** wavefront_raymap ≡ render_raymap bit-identically (side,
+pos, vel) on the cube scene: RK4, starved budget (exercises out-of-steps
+and out-of-passages), and dopri; sweep granularities 1/7/64; bin on/off;
+ambient and in-throat cameras. `sweep_ray` allocates 0 bytes in both
+integrator modes behind a function barrier (the naive `@allocated` on
+non-const globals reports 80 phantom bytes of caller dispatch — barrier it).
+Now pinned in test/ (289 cold); physics_diff exactly 0.0.
+
+**Surprise datum.** The staged driver beats the recursive renderer on CPU:
+96×72 cube, RayBudget(0.05, 400, 4), 16 threads — recursive 0.538 s,
+wavefront 0.32–0.36 s (0.59–0.68x) across sweep/bin settings. Plausible
+why-chain, not isolated: render_raymap threads over image *rows*, and ray
+cost is wildly row-uneven (mouth-crossing rays cluster), so threads idle at
+row barriers; the wavefront pool re-@threads over the compacted active list
+each round, which is self-load-balancing, and the per-passage boxes are
+gone. Not worth optimizing further on CPU — the point was the structure —
+but it means the restructure costs nothing to adopt everywhere.
+
 ## 2026-07-14c — F32 traced end-to-end: quantile curves parallel to the 1-ulp baseline (offset ≈ 2^28 = "just rounding"), the undecidable band is ~1e-4 of pixels and sits on the limit-cycle boundary, renders indistinguishable
 
 **Motivation.** 2026-07-14b established F32 christoffel accuracy per *eval*
