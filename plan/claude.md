@@ -57,10 +57,19 @@ integrators, resumable across sweeps), mouth entry the host-side F64 stage,
 the driver sweep→compact→entry rounds with optional depth-branch binning.
 Certified bit-identical to render_raymap (289 tests cold, physics_diff
 0.0), and the staged CPU driver came out ~1.6x *faster* than the recursive
-renderer (self-load-balancing active list vs row threading). Step 5's
-remainder is now the device tracer kernel itself: sweep_ray + settle/
-transition/to_ambient in-kernel on the Adapt-ed throat (gpu_christoffel.jl
-scaffolding), host entry stage, then the register-pressure lever.
+renderer (self-load-balancing active list vs row threading). Then the
+**device tracer kernel landed the same day** (gpu/jupitergpu.jl +
+scripts/gpu_tracer.jl, measurements.md 2026-07-14e): sweep_ray runs
+in-kernel unmodified, and it is **correct on-card** — 0 side flips, 85% of
+F64 rays bit-identical end-to-end (rest transcendental-intrinsic ulps),
+F32 mirroring the 14c acceptance data, host stages + transfers negligible
+— but **spill-bound slow**: naive device F32 ~7.7x behind the 16-thread
+CPU wavefront (255 regs, 42.5KB local/thread; F64 only 2x F32 on a 1:64
+card, so local traffic, not FLOPs). Step 5's structure is complete; GPU
+throughput is now gated on exactly the named register lever — hand-rolled
+closed-form derivatives in production, AD staying the reference oracle —
+plus parallelism supply (frame batches; a 27.6k-ray image can't hide
+spill latency).
 Gallery: first_light, textured trefoil, cube first flythrough.
 
 ## Next candidates, kaarel picks the order
@@ -88,11 +97,13 @@ Gallery: first_light, textured trefoil, cube first flythrough.
   ray bundles). **Wavefront restructure DONE 2026-07-14d** (src/wavefront.jl:
   isbits WavefrontRay{T} stage-tagged records, sweep_ray the box-free kernel
   body, host F64 entry stage, depth-branch binning plumbed; bit-identical to
-  render_raymap, ~1.6x faster on CPU for free). Remaining: **the device
-  tracer kernel** — sweep_ray + settle/transitions/to_ambient in-kernel on
-  the Adapt-ed throat, entry solves staying host-side, wavefront_raymap
-  growing a device driver (promote gpu_christoffel.jl's PackedTable/adapt
-  rules to a gpu/ module when it lands). Register pressure: the named
+  render_raymap, ~1.6x faster on CPU for free). **Device tracer kernel DONE
+  2026-07-14e** (gpu/jupitergpu.jl — the promoted module — + DeviceSweep
+  slotting into run_wavefront!'s now-swappable sweep stage;
+  scripts/gpu_tracer.jl the measurement): correct on-card with the oracle
+  chain intact, throughput naive-loses ~5-8x to the CPU, spill-bound —
+  the port is structurally complete and the remaining GPU work is
+  arithmetic density, not plumbing. Register pressure: the named
   lever is **hand-rolled derivatives in production, AD stays in reference
   as the oracle** (kaarel 2026-07-14b) — the 27KB/thread F32 spill is dual
   bloat (48 carrier floats per scalar, mostly structural zeros); Γ needs
