@@ -38,11 +38,12 @@ ahead at 768×576**: resolution alone feeds the card, so no GPU throughput
 lever remains on the critical path. The production Γ path is AD-free
 closed-form, which also settles shader portability.
 
-Latest flight work (working copy / jj): the first trefoil fly-through —
-flyvideo.jl grew scene=/pacing knobs; 701 uniform frames at 192×144 in 6
-minutes (pre-jets this was hour-class). The honest constant-speed cube video
-(uniform Δτ ≈ 0.0037, ~1670 frames) stopped being deferred-for-cost; it just
-hasn't been wanted yet.
+Latest flight work (2026-07-16 second session, closed out post hoc): the
+first trefoil fly-through — flyvideo.jl grew scene=/pacing knobs; 701
+uniform frames at 192×144 in 6 minutes (pre-jets this was hour-class);
+out/trefoil_flythrough.mp4, gallery promotion still kaarel's call. The
+honest constant-speed cube video (uniform Δτ ≈ 0.0037, ~1670 frames)
+stopped being deferred-for-cost; it just hasn't been wanted yet.
 
 Gallery: first_light, textured trefoil, cube first flythrough.
 
