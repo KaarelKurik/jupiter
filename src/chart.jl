@@ -66,7 +66,9 @@ placeholder pending a deliberate choice; the contract is
 f(0)=1, f(1)=0, C^inf and flat at both ends
 (flat at 0: smoothness across wedge seams and chart centers;
 flat at 1: smoothness where a chart's support ends).
-f(x)+f(1-x)=1 additionally makes corner weights sum to exactly 1.
+f(x)+f(1-x)=1 additionally makes corner weights sum to exactly 1 —
+convenience, not load-bearing: surface() divides by the weight total
+regardless, so blend candidates need not satisfy it.
 """
 function blend_scalar(x)
     flat_bump(1 - x) / (flat_bump(x) + flat_bump(1 - x))
