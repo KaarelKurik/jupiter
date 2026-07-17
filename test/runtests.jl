@@ -111,6 +111,31 @@ end
     @test maximum(abs, cs - cs_fd) < 1e-6
 end
 
+@testset "hand-rolled christoffel vs AD twin" begin
+    # the jet assembly against the dual-pass body it replaced, every cube
+    # chart across all depth branches (outer / boundary / blend / inner);
+    # plus Float32 eltype honesty on Float32 tables
+    golden = 2pi * 0.6180339887498949
+    for vi in 1:length(m.vertices), i in 1:4, d in (-0.05, 0.0, 0.25, 0.5, 0.6)
+        r = 0.05 + 0.1 * i
+        uv = r .* [cos(golden * (i + 5 * vi)), sin(golden * (i + 5 * vi))]
+        v = J.SituatedPhase(J.induced_chart(ht, vi), [uv; d], [0.1, 0.2, 0.3])
+        Γj = J.christoffel(nothing, v)
+        Γa = J.christoffel_ad(nothing, v)
+        @test maximum(abs, Γj - Γa) / (1 + maximum(abs, Γa)) < 1e-11
+    end
+
+    surf32 = J.Surface(m, J.chart_polys(surf), [Float32.(p) for p in J.packed_polys(surf)])
+    th32 = J.Throat(surf32, J.params(th), th.placements)
+    v32 = J.SituatedPhase(J.induced_chart(J.HalfThroat(th32, 1), 1),
+                          J.SVector{3, Float32}(0.2, 0.15, 0.25),
+                          J.SVector{3, Float32}(0.1, 0.2, 0.3))
+    Γ32 = J.christoffel(nothing, v32)
+    @test eltype(Γ32) == Float32
+    @test maximum(abs, Float64.(Γ32) -
+                       J.christoffel(nothing, J.SituatedPhase(c, [0.2, 0.15, 0.25], [0.1, 0.2, 0.3]))) < 1e-4
+end
+
 @testset "geodesics" begin
     energy(v) = v.vel' * J.metric(nothing, v.chart, v.pos) * v.vel
 

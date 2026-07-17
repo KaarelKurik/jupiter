@@ -41,7 +41,7 @@ function metric(env, chart, pos)
     depth_interpolate(t, outer_metric(env, chart, pos), inner_metric(env, chart, pos))
 end
 
-function christoffel(env, v::SituatedPhase)
+function christoffel_ad(env, v::SituatedPhase) # the AD elaboration: oracle for the jet version below
     mf = situate(metric, env, v.chart)
     # one dual pass with a 3-partial seed: metric value and all three derivatives together
     tag = typeof(ForwardDiff.Tag(mf, eltype(v.pos)))
@@ -56,6 +56,94 @@ function christoffel(env, v::SituatedPhase)
         j = (n - 1) ÷ 9 + 1
         half * sum(inv_m[k, u] * (dg[j][u, i] + dg[i][j, u] - dg[u][i, j]) for u in 1:3)
     end)
+end
+
+# ---- hand-rolled christoffel (jets.jl): g and ∂g assembled closed-form from
+# the order-3 surface jet, depth entering exactly (collar columns linear in d,
+# inner metric d-free, depth blend a scalar 1D chain). The AD twin above and
+# reference.jl are the oracles; this is what runs in production and in-kernel.
+
+function normal_jet(sj::Jet3) # unit outward normal as an order-2 jet: normalize(su × sv)
+    cj = leibniz(cross, jdu(sj), jdv(sj))
+    m2 = leibniz(dot, cj, cj)
+    s0 = sqrt(m2.f)
+    nr = compose1(s0, 1 / (2 * s0), -1 / (4 * (s0 * m2.f)), m2) # √x chain
+    jdiv(cj, nr)
+end
+
+sym3(a11, a12, a13, a22, a23, a33) =
+    SMatrix{3, 3}(a11, a12, a13, a12, a22, a23, a13, a23, a33)
+
+function outer_metric_gradient(sj::Jet3, d)
+    nj = normal_jet(sj)
+    nu = jdu(nj); nv = jdv(nj)
+    su = jdu(sj); sv = jdv(sj)
+    # collar jacobian columns e_a = ∂_a(s − d·n̂) as (u,v)-jets, linear in d
+    e1 = Jet1(su.f - d * nu.f, su.fu - d * nu.fu, su.fv - d * nu.fv)
+    e2 = Jet1(sv.f - d * nv.f, sv.fu - d * nv.fu, sv.fv - d * nv.fv)
+    e3 = Jet1(-nj.f, -nj.fu, -nj.fv)
+    e1d = -nu.f; e2d = -nv.f # ∂d of the columns; ∂d e3 = 0
+    g = sym3(dot(e1.f, e1.f), dot(e1.f, e2.f), dot(e1.f, e3.f),
+             dot(e2.f, e2.f), dot(e2.f, e3.f), dot(e3.f, e3.f))
+    dgu = sym3(2 * dot(e1.fu, e1.f), dot(e1.fu, e2.f) + dot(e1.f, e2.fu), dot(e1.fu, e3.f) + dot(e1.f, e3.fu),
+               2 * dot(e2.fu, e2.f), dot(e2.fu, e3.f) + dot(e2.f, e3.fu), 2 * dot(e3.fu, e3.f))
+    dgv = sym3(2 * dot(e1.fv, e1.f), dot(e1.fv, e2.f) + dot(e1.f, e2.fv), dot(e1.fv, e3.f) + dot(e1.f, e3.fv),
+               2 * dot(e2.fv, e2.f), dot(e2.fv, e3.f) + dot(e2.f, e3.fv), 2 * dot(e3.fv, e3.f))
+    dgd = sym3(2 * dot(e1d, e1.f), dot(e1d, e2.f) + dot(e1.f, e2d), dot(e1d, e3.f),
+               2 * dot(e2d, e2.f), dot(e2d, e3.f), zero(d))
+    (g, dgu, dgv, dgd)
+end
+
+function inner_metric_gradient(sj::Jet3, prm, C)
+    cs = C(prm.cross_scale)
+    su = jdu(sj); sv = jdv(sj)
+    z = zero(cs)
+    g = SMatrix{3, 3}(cs * dot(su.f, su.f), cs * dot(sv.f, su.f), z,
+                      cs * dot(su.f, sv.f), cs * dot(sv.f, sv.f), z,
+                      z, z, C(prm.depth_scale))
+    dgu = sym3(cs * (2 * dot(su.fu, su.f)), cs * (dot(su.fu, sv.f) + dot(su.f, sv.fu)), z,
+               cs * (2 * dot(sv.fu, sv.f)), z, z)
+    dgv = sym3(cs * (2 * dot(su.fv, su.f)), cs * (dot(su.fv, sv.f) + dot(su.f, sv.fv)), z,
+               cs * (2 * dot(sv.fv, sv.f)), z, z)
+    (g, dgu, dgv)
+end
+
+function christoffel_from(g, dgu, dgv, dgd, C)
+    dg = (dgu, dgv, dgd) # dg[c][a,b] = ∂g_ab/∂x_c
+    inv_m = inv(g)
+    half = C(0.5)
+    SArray{Tuple{3, 3, 3}}(ntuple(Val(27)) do n
+        k = (n - 1) % 3 + 1
+        i = ((n - 1) ÷ 3) % 3 + 1
+        j = (n - 1) ÷ 9 + 1
+        half * sum(inv_m[k, u] * (dg[j][u, i] + dg[i][j, u] - dg[u][i, j]) for u in 1:3)
+    end)
+end
+
+function christoffel(env, v::SituatedPhase)
+    pos = v.pos
+    C = carrier(pos[1])
+    prm = params(half_throat(v.chart))
+    sj = surface_jet(env, v.chart, SVector(pos[1], pos[2]))
+    t = pos[3] / C(prm.cylinder_depth)
+    # branch structure mirrors metric(): exactly outer / exactly inner outside the blend
+    if primal(t) <= 0
+        g, dgu, dgv, dgd = outer_metric_gradient(sj, pos[3])
+    elseif primal(t) >= 1
+        g, dgu, dgv = inner_metric_gradient(sj, prm, C)
+        dgd = zero(g)
+    else
+        go, dgou, dgov, dgod = outer_metric_gradient(sj, pos[3])
+        gi, dgiu, dgiv = inner_metric_gradient(sj, prm, C)
+        b = blend_jet(t)
+        w = b[1]
+        wp = b[2] / C(prm.cylinder_depth) # d(w)/d(depth)
+        g = w * go + (1 - w) * gi
+        dgu = w * dgou + (1 - w) * dgiu
+        dgv = w * dgov + (1 - w) * dgiv
+        dgd = w * dgod + wp * (go - gi) # ∂d gi = 0
+    end
+    christoffel_from(g, dgu, dgv, dgd, C)
 end
 
 # the transport law's right-hand side: covariant rate of w carried along vel

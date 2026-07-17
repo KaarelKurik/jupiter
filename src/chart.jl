@@ -100,6 +100,67 @@ function surface(env, chart, uv)
     acc / total_weight
 end
 
+# ---- order-3 jet of the blended surface (hand-rolled derivatives; jets.jl).
+# Each function mirrors its plain twin above op-for-op in the value lane.
+
+function wedge_square_coords_cjet(n_wedges, wedge_index, uv)
+    C = carrier(uv[1])
+    s, c = sincos(C(-2pi * wedge_index / n_wedges)) # same one-rounding angle as wedge_square_coords
+    rz = cjet_scale(complex(c, s), cjet_identity(uv)) # complex mult = the same rotation arithmetic
+    cjet_scale(C(sqrt(2)), cpow_jet(rz, n_wedges / 4))
+end
+
+# (st, 1−s from the next corner) = i + (−i)·w: holomorphic, coefficients exact
+next_corner_cjet(j::CJet) = CJet(complex(imag(j.w0), 1 - real(j.w0)),
+                                 complex(imag(j.w1), -real(j.w1)),
+                                 complex(imag(j.w2), -real(j.w2)),
+                                 complex(imag(j.w3), -real(j.w3)))
+
+function square_coords_to_chart_cjet(n_wedges, wedge_index, stj::CJet)
+    C = carrier(real(stj.w0))
+    z = cpow_jet(cjet_rdiv(stj, C(sqrt(2))), 4 / n_wedges)
+    s, c = sincos(C(2pi * wedge_index / n_wedges))
+    cjet_scale(complex(c, s), z)
+end
+
+function corner_contribution_jet(chart, corner, stj::CJet)
+    sj = re_jet(stj)
+    tj = im_jet(stj)
+    bs = compose1(blend_jet(sj.f)..., sj)
+    bt = compose1(blend_jet(tj.f)..., tj)
+    w = leibniz(*, bs, bt)
+    c = induced_chart(half_throat(chart), vertex_index(corner))
+    ζj = square_coords_to_chart_cjet(valence(corner), half_edge_offset(corner), stj)
+    pd = eval_packed_partials(packed_polys(geometry(half_throat(chart)))[vertex_index(c)],
+                              real(ζj.w0), imag(ζj.w0))
+    val = vjet3(wirtinger_compose(pd[1], ζj.w1, ζj.w2, ζj.w3),
+                wirtinger_compose(pd[2], ζj.w1, ζj.w2, ζj.w3),
+                wirtinger_compose(pd[3], ζj.w1, ζj.w2, ζj.w3))
+    (w, val)
+end
+
+"""
+order-3 (u,v) jet of surface(): value lane bit-identical to surface(), the ten
+derivative lanes closed-form. christoffel assembles g and ∂g from this.
+"""
+function surface_jet(env, chart, uv)
+    n = valence(chart)
+    k = wedge_index(n, primal.(uv))
+    corner = ccw(half_edge_handle(chart), k)
+    stj = wedge_square_coords_cjet(n, k, uv)
+    w, val = corner_contribution_jet(chart, corner, stj)
+    acc = leibniz(*, w, val)
+    tw = w
+    for _ in 1:3
+        corner = next(corner)
+        stj = next_corner_cjet(stj)
+        w, val = corner_contribution_jet(chart, corner, stj)
+        acc = jadd(acc, leibniz(*, w, val))
+        tw = jadd(tw, w)
+    end
+    jdiv(acc, tw)
+end
+
 normal_from_columns(jac) = generic_normalize(cross(jac[:, 1], jac[:, 2]))
 
 function surface_normal_out(env, chart, uv)

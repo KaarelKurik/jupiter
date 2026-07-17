@@ -4,6 +4,121 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-16 — hand-rolled christoffel derivatives land: 12x CPU, 21-34x device, device F32 reaches CPU parity at 384×288; F32 accuracy *improves*; all certification instruments green without re-baselining
+
+**What changed** (src/jets.jl + surface_jet in chart.jl + christoffel assembly
+in geodesic.jl). Production christoffel no longer runs three nested ForwardDiff
+dual passes (3×3×2 seeding = 48 carrier floats per scalar, mostly structural
+zeros — the spill source named 14b/14e). It now assembles g and ∂g closed-form
+from one order-3 (u,v) jet of the blended surface. The old dual-pass body
+survives verbatim as `christoffel_ad` (the in-tree oracle twin, pinned in
+test/); reference.jl is untouched. Structure of the hand derivation:
+
+- **The wedge chain is holomorphic** in z = u+iv: wedge_square_coords is
+  rotation ∘ z^(n/4) ∘ scale, next_corner_coords is w ↦ i + (−i)·w, and
+  square_coords_to_chart is scale ∘ z^(4/m) ∘ rotation. So its whole order-3
+  jet is 4 complex numbers (CJet) with 1D chain rules; z^p derivatives are
+  the recurrence φ⁽ᵏ⁺¹⁾ = (p−k)φ⁽ᵏ⁾/z reusing fake_complex_pow for the value.
+  Real (u,v) partials fall out by Cauchy–Riemann at the seams to real code.
+- **Corner polynomial ∘ holomorphic via Wirtinger calculus**: ∂z acts only
+  through w, ∂z̄ only through w̄, so the bivariate Faà di Bruno factorizes
+  into two 1D chains; h real ⇒ D_ab = conj(D_ba) leaves five D terms. The
+  ten poly partials come from one table read (derivative-carrying double
+  Horner: A′ₖ₊₁ = A′ₖx + Aₖ, A″ₖ₊₁ = A″ₖx + 2A′ₖ, …).
+- **Blends are scalar exp(−1/x) chains** with closed-form b′..b‴, gated on
+  b == 0 so F32 near-seam points can't make 0·Inf (the 1/x powers overflow
+  F32 long before exp(−1/x) stops underflowing to zero — checked: past the
+  gate w⁶ ≤ ~1.2e12 in F32, no overflow possible).
+- **Depth enters exactly**: collar jacobian columns are linear in d
+  (e_a = ∂_a s − d ∂_a n̂, ∂d-column = −n̂), the inner metric is d-free, the
+  depth blend is a 1D chain — no third derivative direction ever needed, the
+  step-4 "depth factors out exactly" observation cashed in. n̂ needs only an
+  order-2 jet (cross + √ chains); Γ contraction is the same final block.
+- **Value lanes reproduce the plain evaluators op-for-op** (same divisions,
+  same addition order): surface_jet's value is bit-identical to surface(),
+  which made oracle debugging trivial (any mismatch is in a derivative lane).
+
+**Correctness.** surface_jet's 10 coefficients vs third-order *nested*
+ForwardDiff of production surface(): worst 5.3e-13 rel (third-order lanes,
+trefoil), first-order lanes ~1e-15; value lane exactly bit-identical, both
+scenes, all charts (probe swept every vertex × 12 spiral points). christoffel
+vs the AD twin and vs Reference.christoffel over 258k stratified points (both
+scenes, both halves, depths spanning outer / t=0 / blend / t=1 / inner):
+median ~2e-14, max 5.9e-13 rel. Cold: **451 tests green** (new testset pins
+jet-vs-AD-twin at 1e-11 across all cube charts × depth branches + F32 eltype
+honesty), and **physics_diff passes against the existing baselines** — 0 side
+flips, worst deviation 8.1e-15 cube / 1.26e-10 trefoil, inside the 1e-9
+arithmetic-reordering band. No re-baseline needed; the derivative-lane
+arithmetic change lands within the tolerance physics_diff was built to absorb.
+
+**F32 accuracy improves** (fewer, better-conditioned ops): jet christoffel on
+F32 tables/phases vs F64 truth median 4.5e-7 / q99 2.3e-6 / max 4.3e-6
+sup-rel — vs AD-F32's 9.5e-7 / 3.8e-6 / 1.1e-5 (14b). End-to-end,
+precision_diff reproduces the 14c acceptance shape: f32/ulp quantile offset
+flat at ~2^27–28.6, **0 side flips both scenes**, passage count still the
+deviation ordinal. One 110k-ray render shows a single boundary-filament ray
+at large F32 deviation (max angle 1.69 rad, q99 1.4e-6) — the 14c
+undecidable-band class, not a regression.
+
+**Throughput** (scripts/gpu_tracer.jl, cube, RayBudget(0.05,400,4), RTX 4070
+SUPER, 16 host threads; wall seconds best-of-2, device best config):
+
+    192×144 (27.6k rays)       14e (AD)    now (jets)   speedup
+    recursive cpu               1.93        0.154        12.5x
+    wavefront cpu F64           1.21        0.102        11.9x
+    wavefront cpu F32           1.09        0.095        11.5x
+    device F64 best            16.2         0.752        21.5x
+    device F32 best             8.35        0.245        34x
+
+    384×288 (110.6k rays):  wavefront cpu F32 0.365,  device F32 best 0.366
+    96×72   (6.9k rays):    wavefront cpu F32 0.027,  device F32 best 0.222
+
+CPU 1-thread christoffel microbench (cold): jet 1.49 µs/eval vs AD 18.3
+µs/eval = **12.3x** — the register lever is equally a CPU lever, and the
+end-to-end 11.5-12.5x render speedups confirm christoffel was ~90%+ of trace
+cost. Kernel footprint: still 255 registers, but local (spill) bytes/thread
+drop 42.5K → **19.2K** F32 and 68.9K → **23.6K** F64 (the remaining local is
+integrator state + record, not duals). Device F64 is now 2.9x behind
+16-thread CPU (1:64-FP64 card), device F32 **reaches CPU parity at 384×288**
+(0.61x the recursive-renderer wall) and its per-ray cost is still falling
+with ray count (32 → 8.9 → 3.3 µs/ray at 6.9k/27.6k/110.6k): with per-thread
+traffic cut, the remaining gap to the card's arithmetic capacity is
+**parallelism supply** — exactly 14e's second gate. Frame batches (flat pool
++ frame id) are the named next lever; persistent threads behind that.
+
+**Why-chain.** 14e diagnosed spill-bound (F64 only 2x F32 on a 1:64 card;
+kernel-only ≈ wall). Cutting per-scalar dual freight 48 → 10 real
+coefficients (and n̂'s to 6) cut local traffic ~2.2-2.9x and bought 21-34x
+kernel time — super-linear because spilled bytes were being re-read per
+RK4/dopri stage, per passage. The F64-vs-F32 device ratio moving from 2.0x
+to 2.9x says the kernel is now partly compute-bound: the lever did its job;
+what's left is feeding the card.
+
+**Addendum — kaarel's pushback measured: resolution alone feeds the card;
+"rays in flight" is not a lever to build.** Ladder extended to 768×576
+(442k rays), device F32 best wall µs/ray: 32.1 / 8.86 / 3.31 / 1.53 at
+6.9k / 27.6k / 110.6k / 442k rays (kernel-only 1.18 at 442k) — still
+falling, and the device F32 wall is now **2.1x faster than the 16-thread
+CPU wavefront** (0.679 vs 1.44 s; 0.28x the recursive wall). F64 device
+2.05 s vs CPU F64 1.66 s — within 1.25x of the CPU on a 1:64-FP64 card.
+So production-scale resolutions supply the parallelism by themselves;
+frame batching demotes to the offline-video corner (flyvideo: cameras all
+known ahead — legitimate batch regime) and small-res test runs. Residual
+starvation at fixed resolution decomposes into (a) wave quantization —
+255 regs ⇒ one 256-thread block/SM ⇒ 14.3k resident threads/wave — and
+(b) compaction-tail rounds running below wave size (the limit-cycle
+stragglers); both shrink as fractions of the work with resolution. The
+realtime-idiomatic fix for both, if ever needed, is **persistent threads**
+pulling rays from the pool queue (same driver semantics, different launch
+shape — the standard wavefront-path-tracing idiom), not cross-frame
+batching, which costs input latency realtime can't pay. Realtime frame
+deadlines map to budget caps + progressive fallback on unresolved boundary
+filaments — semantics RayBudget/unresolved already has. Two scale notes:
+wall > kernel-only at 442k (0.679 vs 0.52 — host entry solves/transfers
+~20%, pipelinable by overlapping round k+1 entry solves with kernel round
+k); and 1-2/442k F32 side flips vs truth — the boundary-filament class
+appearing at scale, consistent with 14c density.
+
 ## 2026-07-14e — the device tracer kernel runs and is correct (0 flips, 85% of F64 rays bit-identical); naive throughput loses to the CPU ~5-8x, and the gate is spill, exactly where 14b pointed
 
 **What ran** (scripts/gpu_tracer.jl; gpu/jupitergpu.jl is the promoted
