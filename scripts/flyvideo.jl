@@ -7,9 +7,11 @@
 #    only log the flow so the choice can be audited. Emits out/flyu_NNNN.ppm.
 #    Pick Δτ from an adaptive run: Δτ = θ_target / max(flow rate) — the whole
 #    flight at the rate its most demanding moment requires.
+# scene=trefoil flies the knotted throat (cube default); frames get the scene
+# name prefixed (out/trefoil_flyd_NNNN.ppm).
 # Assemble with e.g.
 #   ffmpeg -framerate 24 -i out/flyd_%04d.ppm -pix_fmt yuv420p out/flythrough.mp4
-#   julia --project --threads=auto scripts/flyvideo.jl [WxH] [uniform=Δτ]
+#   julia --project --threads=auto scripts/flyvideo.jl [WxH] [uniform=Δτ] [scene=trefoil]
 using jupiter
 using LinearAlgebra
 const J = jupiter
@@ -22,12 +24,17 @@ const tau0 = argval("tau0", 0.0)     # resume: coast (no rendering) to this τ f
 const frame0 = Int(argval("frame0", 0.0)) # resume: continue numbering from here
 const dims = (d = findfirst(a -> occursin("x", a) && !occursin("=", a), ARGS);
               d === nothing ? "192x144" : ARGS[d])
+const scene_name = (i = findfirst(a -> startswith(a, "scene="), ARGS);
+                    i === nothing ? "cube" : String(split(ARGS[i], "=")[2]))
 const w, h = parse.(Int, split(dims, "x"))
 const thf = tan(pi / 3.2 / 2)
 const θ_pixel = (pi / 3.2) / w        # angular size of a render pixel
-const θ_target = 3 * θ_pixel          # aim for ~3 px of median flow per frame
+# pacing knobs, overridable per flight: a strong lens filling the view (the
+# trefoil) holds median flow high through the whole approach, so the cube's
+# floor would spend the frame budget before the crossing
+const θ_target = argval("target", 3.0) * θ_pixel # aim for ~target px of median flow per frame
 const flip_max = 0.15                 # probe fraction allowed to change exit side
-const Δτ_floor = 0.004                # hard floor: below this, motion is shimmer, not flow
+const Δτ_floor = argval("floor", 0.004) # hard floor: below this, motion is shimmer, not flow
 const frame_cap = 1200                # absolute runaway guard
 const probe_w, probe_h = 16, 12
 const coast_h = 0.02
@@ -57,19 +64,29 @@ function flow(rm1, rm2)
     (q(0.5), q(0.9), q(1.0), flips / (probe_w * probe_h))
 end
 
+function build_scene() # (throat, mouth tessellation, campos, fwd, τ_total)
+    if scene_name == "trefoil"
+        m = J.load_obj(joinpath(root, "res", "models", "trefoil.obj"))
+        th = J.Throat(J.Surface(m, J.fit_geometry(m)), J.ThroatParams(1.0, 1.0, 0.2, 0.3))
+        campos = J.SVector(0.5, -7.5, 3.5) # the physics_diff approach vector: known to reach the mouth
+        (th, 2, campos, J.generic_normalize(J.SVector(0.262, -1.0, 0.437) - campos), 14.0)
+    else
+        m = J.cubemesh()
+        th = J.Throat(J.Surface(m, J.fit_geometry(m)), J.ThroatParams(1.0, 1.0, 0.5, 0.75))
+        campos = J.SVector(0.9, -2.8, 0.9)
+        (th, 10, campos, J.generic_normalize(-campos), 6.2)
+    end
+end
+
 function main()
-    m = J.cubemesh()
-    surf = J.Surface(m, J.fit_geometry(m))
-    th = J.Throat(surf, J.ThroatParams(1.0, 1.0, 0.5, 0.75))
-    mouths = (J.TessellatedMouth(nothing, J.HalfThroat(th, 1), 10),
-              J.TessellatedMouth(nothing, J.HalfThroat(th, 2), 10))
+    th, tess, campos, fwd, τ_total = build_scene()
+    mouths = (J.TessellatedMouth(nothing, J.HalfThroat(th, 1), tess),
+              J.TessellatedMouth(nothing, J.HalfThroat(th, 2), tess))
     sky = J.TexturedSky(J.load_ppm(joinpath(root, "res", "textures", "sky1.ppm")),
                         J.load_ppm(joinpath(root, "res", "textures", "sky2.ppm")))
     scene = J.Scene(th, mouths, sky)
     budget = J.RayBudget(0.05, 400, 4)
 
-    campos = J.SVector(0.9, -2.8, 0.9)
-    fwd = J.generic_normalize(-campos)
     right = J.generic_normalize(cross(fwd, [0.0, 0.0, 1.0]))
     cam = J.FlyingCamera(J.AmbientRay(J.HalfThroat(th, 1), campos, fwd),
                          J.SMatrix{3, 3, Float64}([right cross(right, fwd) fwd]))
@@ -79,13 +96,12 @@ function main()
         "ambient$(J.side(J.half_throat(c.state)))" : "chart d=$(round(c.state.pos[3], digits=2))"
 
     mkpath(joinpath(root, "out"))
-    prefix = uniform > 0 ? "flyu_" : "flyd_"
+    prefix = (scene_name == "cube" ? "" : scene_name * "_") * (uniform > 0 ? "flyu_" : "flyd_")
     if tau0 > 0 # resume: replay the flight to τ0 without rendering
         cam = J.coast(nothing, scene, cam, tau0, coast_h)
         println("resumed at τ=", tau0, " (", where(cam), "), frame numbering from ", frame0 + 1)
     end
     τ, Δτ, frame, t0 = tau0, uniform > 0 ? uniform : 0.05, frame0, time()
-    τ_total = 6.2
     while τ < τ_total && frame < frame_cap
         p1 = probe(cam)
         medflow, q90flow, maxflow, flipfrac = 0.0, 0.0, 0.0, 0.0
