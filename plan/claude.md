@@ -2,10 +2,10 @@
 
 Companion to kaarel's journal (`plan/kaarel.md`); holds current state, the
 roadmap, and standing conventions. Dated session records live alongside as
-`plan/YYYY-MM-DD.md`. Last updated 2026-07-14 (fourth session). **This file
-is the resume point** — read it plus `jj log` before touching code.
+`plan/YYYY-MM-DD.md`. Last updated 2026-07-16. **This file is the resume
+point** — read it plus `jj log` before touching code.
 
-## Where we are (2026-07-14, fourth session)
+## Where we are (2026-07-16)
 
 The POC pipeline is complete end-to-end and now includes cameras *in and
 through* the wormhole: fitted YZ surface → blending → throat metric →
@@ -70,6 +70,33 @@ throughput is now gated on exactly the named register lever — hand-rolled
 closed-form derivatives in production, AD staying the reference oracle —
 plus parallelism supply (frame batches; a 27.6k-ray image can't hide
 spill latency).
+Fifth session (2026-07-16): the **hand-rolled derivative lever landed and
+paid out on both platforms** (src/jets.jl + surface_jet in chart.jl +
+closed-form g/∂g assembly in geodesic.jl; measurements.md 2026-07-16).
+Production christoffel is now AD-free closed-form — order-3 surface jet:
+the holomorphic wedge chain as complex jets (Cauchy–Riemann to real),
+Wirtinger-factorized poly∘holomorphic composition, derivative-carrying
+Horner poly partials in one table read, 1D exp(−1/x) blend chains, depth
+entering exactly. christoffel_ad kept verbatim as the in-tree oracle twin,
+reference.jl untouched, surface_jet's value lane bit-identical to
+surface(). Certified: jet coefficients vs third-order nested AD worst
+5.3e-13; Γ vs twin/Reference max 5.9e-13 over 258k stratified points; 451
+tests cold green (new testset pins the twin at 1e-11); physics_diff passes
+the existing baselines (0 flips, worst 1.26e-10 — no re-baseline);
+precision_diff reproduces the 14c shape with 0 flips and F32 accuracy
+*improved* (median 4.5e-7 vs AD-F32's 9.5e-7). Paid out: CPU christoffel
+12.3x → whole renders 11.5–12.5x; device kernel 21.5x F64 / 34x F32 (local
+42.5K→19.2K F32, 255 regs; now partly compute-bound, F64/F32 2.0→2.9);
+**device F32 reaches 16-thread-CPU parity at 384×288 and is 2.1x ahead at
+768×576** — kaarel's pushback measured (addendum, measurements.md
+2026-07-16): resolution alone feeds the card, per-ray cost 32→1.5 µs across
+the ladder and still falling, so rays-in-flight is *not* a lever to build.
+Frame batching demoted to the offline-video corner (flyvideo, cameras known
+ahead); the realtime-idiomatic refinements, if ever needed, are persistent
+threads on the same pool (fixes wave quantization + compaction tails
+in-frame) and budget-as-frame-deadline with progressive fallback on the
+boundary filaments — semantics RayBudget already has. The AD-free Γ path
+also settles shader portability.
 Gallery: first_light, textured trefoil, cube first flythrough.
 
 ## Next candidates, kaarel picks the order
@@ -103,16 +130,19 @@ Gallery: first_light, textured trefoil, cube first flythrough.
   scripts/gpu_tracer.jl the measurement): correct on-card with the oracle
   chain intact, throughput naive-loses ~5-8x to the CPU, spill-bound —
   the port is structurally complete and the remaining GPU work is
-  arithmetic density, not plumbing. Register pressure: the named
-  lever is **hand-rolled derivatives in production, AD stays in reference
-  as the oracle** (kaarel 2026-07-14b) — the 27KB/thread F32 spill is dual
-  bloat (48 carrier floats per scalar, mostly structural zeros); Γ needs
-  s..∂³s through polynomial∘wedge∘blend, all closed-form (poly derivatives
-  are packable polys, wedge is powers of z, blend/depth are scalar 1D
-  chains), certified against reference AD exactly like every production
-  optimization. Doubles as the portability road: realtime-flying endpoints
-  likely mean shader stacks with no Julia AD, and 255-reg kernels hurt on
-  every card. Subsumes "split the fused dual passes" surgery. `gpu/`
+  arithmetic density, not plumbing. **Hand-rolled derivatives DONE
+  2026-07-16** (the named register lever, kaarel 2026-07-14b): jets.jl +
+  surface_jet + closed-form g/∂g; certified against reference AD exactly as
+  planned (christoffel_ad the in-tree twin); 12x CPU, 21-34x device, F32
+  accuracy improved, local traffic halved+; device F32 at CPU parity
+  384×288, **2.1x ahead at 768×576 — resolution alone feeds the card**
+  (kaarel's call, measured same day), so no GPU throughput lever remains
+  on the critical path. Optional refinements when wanted: persistent
+  threads on the same pool (realtime-idiomatic; fixes wave quantization +
+  compaction tails in-frame), host/device overlap of entry solves (~20%
+  at 442k rays), frame batching only for offline video. Portability
+  settled: the Γ path is AD-free closed-form, shader stacks need no AD.
+  Subsumed the "split the fused dual passes" surgery. `gpu/`
   subenv holds CUDA.jl (+Adapt); `scripts/gpu_smoke.jl` is the compile
   check, `scripts/gpu_christoffel.jl` the christoffel bench (its
   PackedTable/adapt rules promote to a gpu/ module when the tracer kernel
