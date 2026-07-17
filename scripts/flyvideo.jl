@@ -2,16 +2,28 @@
 #  - adaptive (default): frame spacing chosen so peak apparent motion between
 #    consecutive frames stays near a pixel-scale target, measured on cheap
 #    sparse probe raymaps — accept/reject in the spirit of the DP5 stepper.
-#    Perceptually uniform, time-warped. Emits out/flyd_NNNN.ppm.
+#    Perceptually uniform, time-warped. Emits out/frames/flyd_NNNN.ppm.
 #  - uniform=Δτ: physically honest constant speed at fixed spacing; probes
-#    only log the flow so the choice can be audited. Emits out/flyu_NNNN.ppm.
+#    only log the flow so the choice can be audited. Emits out/frames/flyu_NNNN.ppm.
 #    Pick Δτ from an adaptive run: Δτ = θ_target / max(flow rate) — the whole
 #    flight at the rate its most demanding moment requires.
 # scene=trefoil flies the knotted throat (cube default); frames get the scene
-# name prefixed (out/trefoil_flyd_NNNN.ppm).
+# name prefixed (out/frames/trefoil_flyd_NNNN.ppm).
+# skies: sky1=/sky2= point at equirect PPMs (default the res/textures test
+# graticules). Real skies live as tracked JPGs in res/textures/: skybox[12].jpg
+# (CC0 Poly Haven nature panoramas) and space[12].jpg (kaarel's manual_wormhole
+# bg0/bg1 cubemaps, converted once via scripts/cube2equirect.jl); regenerate
+# the render-ready PPMs per checkout with magick — see below
+# unresolved pixels: each frame the raymap's unresolved pixels (limit-cycle
+# boundary filaments) are retraced under a doubled budget until their fraction
+# drops below unres= (default 0.005) or esc= doublings (default 3) are spent —
+# only the unresolved pixels are retraced, so escalation costs what it chases.
 # Assemble with e.g.
-#   ffmpeg -framerate 24 -i out/flyd_%04d.ppm -pix_fmt yuv420p out/flythrough.mp4
+#   ffmpeg -framerate 24 -i out/frames/flyd_%04d.ppm -pix_fmt yuv420p out/flythrough.mp4
+#   magick res/textures/space1.jpg out/space1.ppm   # once per checkout
+#   magick res/textures/space2.jpg out/space2.ppm
 #   julia --project --threads=auto scripts/flyvideo.jl [WxH] [uniform=Δτ] [scene=trefoil]
+#       [sky1=out/space1.ppm sky2=out/space2.ppm] [unres=0.005] [esc=3]
 using jupiter
 using LinearAlgebra
 const J = jupiter
@@ -19,13 +31,18 @@ const J = jupiter
 const root = joinpath(@__DIR__, "..")
 argval(key, default) = (i = findfirst(a -> startswith(a, key * "="), ARGS);
                         i === nothing ? default : parse(Float64, split(ARGS[i], "=")[2]))
+argstr(key, default) = (i = findfirst(a -> startswith(a, key * "="), ARGS);
+                        i === nothing ? default : String(split(ARGS[i], "=", limit = 2)[2]))
 const uniform = argval("uniform", 0.0)
 const tau0 = argval("tau0", 0.0)     # resume: coast (no rendering) to this τ first
 const frame0 = Int(argval("frame0", 0.0)) # resume: continue numbering from here
 const dims = (d = findfirst(a -> occursin("x", a) && !occursin("=", a), ARGS);
               d === nothing ? "192x144" : ARGS[d])
-const scene_name = (i = findfirst(a -> startswith(a, "scene="), ARGS);
-                    i === nothing ? "cube" : String(split(ARGS[i], "=")[2]))
+const scene_name = argstr("scene", "cube")
+const sky1_path = argstr("sky1", joinpath("res", "textures", "sky1.ppm"))
+const sky2_path = argstr("sky2", joinpath("res", "textures", "sky2.ppm"))
+const unres_max = argval("unres", 0.005) # per-frame unresolved-pixel fraction to escalate against
+const esc_max = Int(argval("esc", 3.0))  # budget doublings before we accept the leftovers
 const w, h = parse.(Int, split(dims, "x"))
 const thf = tan(pi / 3.2 / 2)
 const θ_pixel = (pi / 3.2) / w        # angular size of a render pixel
@@ -64,10 +81,57 @@ function flow(rm1, rm2)
     (q(0.5), q(0.9), q(1.0), flips / (probe_w * probe_h))
 end
 
+# retrace just the raymap's unresolved pixels under a bigger budget, in place.
+# Mirrors keyframe_raymap's camera dispatch and render_raymap's per-pixel body —
+# the full-frame drivers stay untouched, escalation is this script's business.
+function refine!(raymap, scene, budget, cam, tan_half_fov, w, h)
+    idx = findall(==(0), raymap.side)
+    if cam.state isa J.AmbientRay
+        camera = J.Camera(cam.state.pos, cam.frame, tan_half_fov)
+        cam_space = J.half_throat(cam.state)
+        Threads.@threads for n in eachindex(idx)
+            i, j = Tuple(idx[n])
+            out = J.trace_ray(nothing, scene, budget, J.pixel_ray(camera, cam_space, i, j, w, h))
+            out === nothing && continue
+            raymap.side[i, j] = J.side(J.half_throat(out))
+            raymap.pos[:, i, j] = out.pos
+            raymap.vel[:, i, j] = out.vel
+        end
+    else
+        camera = J.SituatedCamera(cam.state.chart, cam.state.pos, cam.frame, tan_half_fov)
+        Threads.@threads for n in eachindex(idx)
+            i, j = Tuple(idx[n])
+            x, y = J.pixel_ndc(i, j, w, h)
+            out = J.trace_ray(nothing, scene, budget, J.camera_ray(nothing, camera, x, y))
+            out === nothing && continue
+            raymap.side[i, j] = J.side(J.half_throat(out))
+            raymap.pos[:, i, j] = out.pos
+            raymap.vel[:, i, j] = out.vel
+        end
+    end
+end
+
+# ambient-2 placement for the trefoil flight: rotate the second mouth's
+# embedding so the flight's outro flies toward the space2 sky's sun. Scene
+# authoring, not physics: the sky asset stays as-shot, the chart-side flight
+# is untouched, and mouth geometry + exit rays rotate rigidly together.
+# Minimal rotation (Rodrigues) taking the exit camera fwd — measured at τ=14
+# with the identity placement — to the sun's luminance centroid in
+# res/textures/space2.jpg. Harmlessly reorients any other sky2 the flight is
+# run under.
+function exit_placement()
+    f = J.generic_normalize(J.SVector(-0.7661, 0.0009, -0.6428)) # exit fwd, identity placement
+    s = J.generic_normalize(J.SVector(-0.1144, -0.1365, 0.984))  # space2 sun direction
+    a = cross(f, s)
+    K = J.SMatrix{3, 3, Float64}(0, a[3], -a[2], -a[3], 0, a[1], a[2], -a[1], 0)
+    J.Placement(J.SMatrix{3, 3, Float64}(I) + K + K * K / (1 + f' * s), zeros(3))
+end
+
 function build_scene() # (throat, mouth tessellation, campos, fwd, τ_total)
     if scene_name == "trefoil"
         m = J.load_obj(joinpath(root, "res", "models", "trefoil.obj"))
-        th = J.Throat(J.Surface(m, J.fit_geometry(m)), J.ThroatParams(1.0, 1.0, 0.2, 0.3))
+        th = J.Throat(J.Surface(m, J.fit_geometry(m)), J.ThroatParams(1.0, 1.0, 0.2, 0.3),
+                      (J.identity_placement(), exit_placement()))
         campos = J.SVector(0.5, -7.5, 3.5) # the physics_diff approach vector: known to reach the mouth
         (th, 2, campos, J.generic_normalize(J.SVector(0.262, -1.0, 0.437) - campos), 14.0)
     else
@@ -82,8 +146,8 @@ function main()
     th, tess, campos, fwd, τ_total = build_scene()
     mouths = (J.TessellatedMouth(nothing, J.HalfThroat(th, 1), tess),
               J.TessellatedMouth(nothing, J.HalfThroat(th, 2), tess))
-    sky = J.TexturedSky(J.load_ppm(joinpath(root, "res", "textures", "sky1.ppm")),
-                        J.load_ppm(joinpath(root, "res", "textures", "sky2.ppm")))
+    sky = J.TexturedSky(J.load_ppm(joinpath(root, sky1_path)),
+                        J.load_ppm(joinpath(root, sky2_path)))
     scene = J.Scene(th, mouths, sky)
     budget = J.RayBudget(0.05, 400, 4)
 
@@ -95,7 +159,7 @@ function main()
     where(c) = c.state isa J.AmbientRay ?
         "ambient$(J.side(J.half_throat(c.state)))" : "chart d=$(round(c.state.pos[3], digits=2))"
 
-    mkpath(joinpath(root, "out"))
+    mkpath(joinpath(root, "out", "frames"))
     prefix = (scene_name == "cube" ? "" : scene_name * "_") * (uniform > 0 ? "flyu_" : "flyd_")
     if tau0 > 0 # resume: replay the flight to τ0 without rendering
         cam = J.coast(nothing, scene, cam, tau0, coast_h)
@@ -122,14 +186,22 @@ function main()
         τ += Δτ
         frame += 1
         raymap = J.keyframe_raymap(nothing, scene, budget, cam, thf, w, h)
-        J.save_ppm(joinpath(root, "out", prefix * lpad(frame, 4, '0') * ".ppm"),
+        unres0, esc_budget, escs = count(==(0), raymap.side), budget, 0
+        while count(==(0), raymap.side) > unres_max * w * h && escs < esc_max
+            esc_budget = J.RayBudget(esc_budget.step_size, 2 * esc_budget.max_steps,
+                                     2 * esc_budget.max_passages)
+            refine!(raymap, scene, esc_budget, cam, thf, w, h)
+            escs += 1
+        end
+        J.save_ppm(joinpath(root, "out", "frames", prefix * lpad(frame, 4, '0') * ".ppm"),
                    J.shade(raymap, sky))
         println("frame ", frame, "  τ=", round(τ, digits=3), "  Δτ=", round(Δτ, digits=4),
                 "  medflow=", round(medflow / θ_pixel, digits=1), "px  q90flow=",
                 round(q90flow / θ_pixel, digits=1), "px  maxflow=",
                 round(maxflow / θ_pixel, digits=1), "px  flips=",
                 round(flipfrac * 100, digits=1), "%  ", where(cam),
-                "  unresolved=", count(==(0), raymap.side))
+                "  unresolved=", unres0, "->", count(==(0), raymap.side),
+                "  esc=", escs)
         flush(stdout)
         # steer the next leg on the coherent bulk motion, floored and capped
         uniform > 0 || (Δτ = clamp(Δτ * clamp(0.85 * θ_target / (medflow + 1e-9), 0.6, 1.8), Δτ_floor, 0.4))

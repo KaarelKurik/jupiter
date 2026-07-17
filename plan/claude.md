@@ -38,21 +38,80 @@ ahead at 768×576**: resolution alone feeds the card, so no GPU throughput
 lever remains on the critical path. The production Γ path is AD-free
 closed-form, which also settles shader portability.
 
-Latest flight work (2026-07-16 second session, closed out post hoc): the
-first trefoil fly-through — flyvideo.jl grew scene=/pacing knobs; 701
-uniform frames at 192×144 in 6 minutes (pre-jets this was hour-class);
-out/trefoil_flythrough.mp4, gallery promotion still kaarel's call. The
-honest constant-speed cube video (uniform Δτ ≈ 0.0037, ~1670 frames)
-stopped being deferred-for-cost; it just hasn't been wanted yet.
+Latest flight work (2026-07-17 video session): flyvideo.jl carries the full
+authoring surface — scene=/pacing knobs, sky1=/sky2= equirect paths,
+unresolved-pixel budget escalation (`unres=`/`esc=`: only side==0 pixels
+retraced under doubled budgets; measurements.md 2026-07-17), and
+`exit_placement()`, the first non-identity Placement in use (side-2
+embedding rotated so the outro flies at the destination sky's hero
+feature — kaarel's call: author the embedding frame, never the sky asset).
+Real skies live as tracked JPGs in res/textures/ (skybox[12].jpg CC0
+nature panoramas; space[12].jpg from kaarel's manual_wormhole bg0/bg1
+cubemaps via scripts/cube2equirect.jl); frame PPMs land in out/frames/.
+Flagship render: gallery/trefoil_flythrough_space.mp4 (768×576, 701
+frames, 125.5 min, esc=4). The honest constant-speed cube video (uniform
+Δτ ≈ 0.0037, ~1670 frames) still just hasn't been wanted.
 
-Gallery: first_light, textured trefoil, cube first flythrough.
+Gallery: first_light, textured trefoil, cube first flythrough, trefoil
+flythrough (nature skies low-res, and the space flythrough at 768×576).
+Oversized gallery files enter via `jj file track --include-ignored <path>`
+(kaarel's preference: explicit track, never raise the auto-track guard).
 
-## Next candidates, kaarel picks the order
+## Next candidates
+
+The perf/quality path is ordered (agreed with kaarel, 2026-07-17b; a priori
+cost analysis in that session's log). Headline of the analysis: the physics
+doesn't price out realtime — ~2 orders of magnitude of pure execution
+headroom on the device path (spill, wave tails, host entry), another 1–2
+algorithmic orders in smooth regions of the exit map, and an irreducible
+core (first hit + chaotic filament integration) that fits interactive
+budgets everywhere except mid-crossing frames, where budget-as-frame-
+deadline degradation (semantics RayBudget already has) is available and
+perceptually honest — the filament is where the image already aliases.
+
+1. **Jacobi-field ray bundles (DNGR-style) — first.** Trace sparse rays +
+   geodesic deviation κ; interpolate where the exit map is smooth,
+   subdivide near critical rings — 10–100x fewer rays and principled
+   antialiasing. The keystone item: κ is simultaneously the shimmer answer
+   (the filament is image-space aliasing), the trust criterion the caches
+   below need, and the endgame F32→F64 fallback flag (passage count stays
+   the cheap ordinal until then). Backend-agnostic (CPU video renders drop
+   from hours toward minutes) and representation-agnostic (survives the
+   fork) — highest information value, no dependencies.
+2. **Scattering-map caches — second, pulled by demand** (they pay when
+   geometry is static across many frames, i.e. the authoring loop; softly
+   gated on the representation fork since tables bake the current charts).
+   Mouth cache first: entry × direction → exit ray per mouth (enter_mouth
+   would expose hit distance), chaotic bands flagged for true integration.
+   In-throat adaptation (worked out 2026-07-17b): the cache *composes* — an
+   in-throat camera ray needs honest integration only for its first leg (a
+   2D family per frame; after first exit it's ambient flight + re-entries,
+   which the mouth cache covers), and the first leg's winding tail lives in
+   the cylinder region, where the product structure (metric d-free ⇒
+   surface geodesic × linear depth, ḋ constant) reduces caching to the 2D
+   surface-geodesic flow: a 4D table shared across rays, frames, and both
+   halves, singular exactly on the ḋ≈0 trapped set (closed surface
+   geodesics), flagged like the critical rings. Composition compounds
+   interpolation error, so table cells carry the κ trust criterion from
+   item 1. (Absorbs the former standalone cylinder-product CPU lever.)
+3. **GPU execution engineering — last**, because it's mechanical, doesn't
+   change images, and multiplies whatever algorithm exists — tune it after
+   the workload shape settles. Known gaps: register/local pressure,
+   persistent threads pulling from the pool queue (wave quantization +
+   compaction tails), host/device overlap of entry solves (~20% of wall at
+   442k rays) or an F32/in-kernel entry solve (the F64 host solve was a
+   14c design convenience, never a requirement — kaarel 2026-07-17), frame
+   batching for offline video (latency-hostile in realtime). Reordering
+   trigger: if kaarel wants the realtime flying-controls authoring soon,
+   this jumps ahead of 2 — bundles + GPU likely reach interactive rates
+   without any cache.
+
+Unordered, as wanted:
 
 - **Representation fork** (own section below): the live design decision.
   Not on any critical path since direct F32 christoffel beat tabulation
   accuracy in-kernel (2026-07-14b); remains the CPU-perf / elegance
-  question, on kaarel's clock.
+  question, on kaarel's clock. Item 2 above leans on it only softly.
 - **Silhouette tightening**: tessellation-only first-hit gives a polygonal
   wormhole outline (spurious rim misses). `Mouth` is an abstract interface
   ready for a second strategy (outward-offset tessellation, or a
@@ -61,28 +120,13 @@ Gallery: first_light, textured trefoil, cube first flythrough.
   ambient images — the unresolved pixels — not grazing hits; that boundary
   is also where fly-through chaotic shimmer lives (image-space aliasing →
   the ray-bundles item).
-- **Jacobi-field adaptive ray bundles** (DNGR-style): trace sparse rays +
-  geodesic deviation, interpolate where the exit map is smooth, subdivide
-  near critical rings — 10–100x fewer rays and principled antialiasing.
-  Same κ machinery is the endgame for the F32→F64 fallback flag (passage
-  count is the cheap ordinal until then) and the shimmer answer.
 - **David mesh path**: res/models/*.stl are triangles; fit_geometry assumes
   quads, so one CC pre-subdivision or a quad remesh comes first; also STL
   loading. (`scripts/david.jl` scaffolding is in kaarel's working copy.)
 - **Camera/authoring vision** (kaarel, longer-term): smooth curve authoring
   should be real-time flying controls — either a GPU build or a lighter
-  schematic view with realtime control; not a near-term design driver.
-- **GPU optional refinements** (all off the critical path, wanted only if a
-  realtime build happens): persistent threads pulling from the pool queue
-  (fixes wave quantization + compaction tails in-frame), host/device
-  overlap of entry solves (~20% of wall at 442k rays), frame batching for
-  offline video only (flyvideo: cameras known ahead; latency-hostile in
-  realtime). Provenance correction (kaarel, 2026-07-17): "mouth entry stays
-  an F64 host solve" was a design convenience (2026-07-14c), not a kaarel
-  requirement, and was never measured as necessary — an F32 or in-kernel
-  entry solve is fair game if the host stage ever blocks full-device
-  rendering. Budget-as-frame-deadline with progressive fallback on boundary
-  filaments — semantics RayBudget already has.
+  schematic view with realtime control; not a near-term design driver, but
+  see the reordering trigger in item 3.
 - **Retire served bit-identity pins** (agreed 2026-07-17): bit-identity is
   a landing instrument, not a permanent semantics; once a restructure's
   equivalence is proven, either merge the twins (a shared body keeps
@@ -91,12 +135,7 @@ Gallery: first_light, textured trefoil, cube first flythrough.
   test to the physics_diff tolerance band. Tied to it: decide whether the
   recursive renderer is a production path or a certification twin, and
   label it accordingly.
-- **Remaining CPU levers**, if CPU cost ever binds again: cylinder-region
-  product structure (for d ≥ cylinder_depth the metric is d-independent —
-  integrate a 2D surface geodesic + linear depth motion; winding rays live
-  there); mouth scattering-map caching (entry × direction → exit ray, per
-  mouth — amortizes fly-throughs, chaotic bands flagged for true
-  integration); tabulated Γ (probed 2026-07-14, demoted — accuracy is
+- **Tabulated Γ** (probed 2026-07-14, demoted — accuracy is
   corner-blend-limited, gated on the representation fork).
 - Multi-mouth ambient spaces need nearest-entry selection across mouths
   (enter_mouth would need to expose hit distance). This includes the

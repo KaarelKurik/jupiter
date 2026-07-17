@@ -4,6 +4,50 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-17 — unresolved-pixel budget escalation: retracing only the side==0 pixels under doubled budgets clears the approach for ~30% extra wall, and the mid-crossing filament band shrinks ~2x per doubling
+
+**What was measured.** flyvideo.jl now escalates per frame: after the normal
+raymap, the unresolved (side==0) pixels — and only those — are retraced from
+scratch under a budget with max_steps and max_passages both doubled, repeating
+until the unresolved fraction drops below `unres=` (default 0.005) or `esc=`
+doublings are spent. Base budget RayBudget(0.05, 400, 4), trefoil flight,
+uniform Δτ=0.02, 701 frames.
+
+**Numbers.** 192×144, esc=3: whole-flight avg unresolved 302→37 px/frame
+(1.09%→0.13%), worst frame 1950→262 (7.1%→0.95%); wall 8.3 min vs 6.0 min
+baseline (+30%). 768×576, esc=4: avg 4852→550 (1.10%→0.12%), worst frame
+31110→2210 (7.0%→0.50%); wall 125.5 min (10.7 s/frame — 16x the pixels of
+192×144 at ~15x the time, so escalation keeps the scaling linear). Escalation
+histogram at 768×576: esc=0 on 315 frames, 1 on 343, 2 on 18, 3 on 2, 4 on 23.
+
+**Why the shape.** The unresolved population is kaarel's limit-cycle boundary
+filament (2026-07-13): rays out of passages, not steps. One passage doubling
+(4→8) resolves the great majority everywhere in the approach — esc=1 frames
+go from ~1-2% to ~0.05% in one round. The stubborn band is exactly the
+mid-crossing frames (chart d≈0.2-0.3, τ≈9.3-9.7, ~25 frames): there ~7% of
+pixels start unresolved and each doubling only halves-ish the survivors
+(frame 467: 27060→1623 after four doublings ≈ 2.0x/doubling) — consistent
+with a measure-zero critical set being approached geometrically from both
+sides. Since retracing costs only the pixels chased, the escalated frames pay
+proportionally to their filament content; brute-force full-frame re-renders
+would have paid the resolved 93% again each round.
+
+**Escalation interacts with nothing.** The base raymap is untouched (frames
+with esc=0 are bit-identical to pre-escalation flyvideo), refine! lives in the
+script and mirrors keyframe_raymap's dispatch + render_raymap's per-pixel body,
+and identical unresolved counts under nature and space skies re-confirm shading
+and tracing are independent.
+
+**Also recorded (same session, scene authoring, not physics):** first
+non-identity `Placement` use — the trefoil flight's side-2 embedding is
+rotated (Rodrigues, exit-fwd → destination-sky hero feature) so the outro
+looks at something worth seeing; probe flow/flip stats are identical to
+identity-placement runs (rigid rotation preserves both angles and sides), and
+export/entry both route through pl.linear, so cross-and-return stays exact.
+manual_wormhole's cubemap skyboxes convert seam-free via
+scripts/cube2equirect.jl (face conventions replicated from deadsimple.rs
+Skybox::sample; bilinear where the Rust is nearest).
+
 ## 2026-07-16 — hand-rolled christoffel derivatives land: 12x CPU, 21-34x device, device F32 reaches CPU parity at 384×288; F32 accuracy *improves*; all certification instruments green without re-baselining
 
 **What changed** (src/jets.jl + surface_jet in chart.jl + christoffel assembly
