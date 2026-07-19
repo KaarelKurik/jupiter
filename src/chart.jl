@@ -3,9 +3,9 @@
 # transitions.
 
 # complementary half-angle form for x<0, where the first form is 0/0 near the negative real axis
-safe_atan2(y, x) = primal(x) >= 0 ? 2 * atan(y / (sqrt(x^2 + y^2) + x)) : 2 * atan((sqrt(x^2 + y^2) - x) / y)
+@inline safe_atan2(y, x) = primal(x) >= 0 ? 2 * atan(y / (sqrt(x^2 + y^2) + x)) : 2 * atan((sqrt(x^2 + y^2) - x) / y)
 
-function fake_complex_pow(z, power)
+@inline function fake_complex_pow(z, power)
     iszero(primal(z[1])) && iszero(primal(z[2])) && return SVector(zero(z[1]), zero(z[2])) # safe_atan2 is 0/0 at the origin
     p = carrier(z[1])(power)
     α = safe_atan2(z[2], z[1])
@@ -31,7 +31,7 @@ function reference_wedge_map(source_n, target_n, pos) # complex powers don't dif
     [real(a3), imag(a3)]
 end
 
-function wedge_index(n_wedges, pos)
+@inline function wedge_index(n_wedges, pos)
     α = atan(pos[2], pos[1])
     Int(mod(floor((α * n_wedges)/(2pi)), n_wedges))
 end
@@ -40,14 +40,14 @@ end
 chart coords -> [0,1]^2 coords of the face at wedge_index,
 with u along the wedge's starting edge
 """
-function wedge_square_coords(n_wedges, wedge_index, pos)
+@inline function wedge_square_coords(n_wedges, wedge_index, pos)
     C = carrier(pos[1])
     s, c = sincos(C(-2pi * wedge_index / n_wedges)) # angle exact in Float64, one rounding into C
     rpos = SVector(c * pos[1] - s * pos[2], s * pos[1] + c * pos[2])
     C(sqrt(2)) * fake_complex_pow(rpos, n_wedges / 4)
 end
 
-function square_coords_to_chart(n_wedges, wedge_index, st)
+@inline function square_coords_to_chart(n_wedges, wedge_index, st)
     C = carrier(st[1])
     z = fake_complex_pow(st / C(sqrt(2)), 4 / n_wedges)
     s, c = sincos(C(2pi * wedge_index / n_wedges))
@@ -59,7 +59,7 @@ same face point as seen from the next corner ccw
 """
 next_corner_coords(st) = SVector(st[2], 1 - st[1])
 
-flat_bump(x) = primal(x) > 0 ? exp(-1 / x) : zero(x)
+@inline flat_bump(x) = primal(x) > 0 ? exp(-1 / x) : zero(x)
 
 """
 placeholder pending a deliberate choice; the contract is
@@ -70,21 +70,21 @@ f(x)+f(1-x)=1 additionally makes corner weights sum to exactly 1 —
 convenience, not load-bearing: surface() divides by the weight total
 regardless, so blend candidates need not satisfy it.
 """
-function blend_scalar(x)
+@inline function blend_scalar(x)
     flat_bump(1 - x) / (flat_bump(x) + flat_bump(1 - x))
 end
 
-function polynomial_surface(chart, uv)
+@inline function polynomial_surface(chart, uv)
     eval_packed(packed_polys(geometry(half_throat(chart)))[vertex_index(chart)], uv)
 end
 
-function corner_contribution(chart, corner, st)
+@inline function corner_contribution(chart, corner, st)
     w = blend_scalar(st[1]) * blend_scalar(st[2])
     c = induced_chart(half_throat(chart), vertex_index(corner))
     (w, polynomial_surface(c, square_coords_to_chart(valence(corner), half_edge_offset(corner), st)))
 end
 
-function surface(env, chart, uv)
+@inline function surface(env, chart, uv)
     n = valence(chart)
     k = wedge_index(n, primal.(uv))
     corner = ccw(half_edge_handle(chart), k)
@@ -105,7 +105,7 @@ end
 # ---- order-3 jet of the blended surface (hand-rolled derivatives; jets.jl).
 # Each function mirrors its plain twin above op-for-op in the value lane.
 
-function wedge_square_coords_cjet(n_wedges, wedge_index, uv)
+@inline function wedge_square_coords_cjet(n_wedges, wedge_index, uv)
     C = carrier(uv[1])
     s, c = sincos(C(-2pi * wedge_index / n_wedges)) # same one-rounding angle as wedge_square_coords
     rz = cjet_scale(complex(c, s), cjet_identity(uv)) # complex mult = the same rotation arithmetic
@@ -113,19 +113,19 @@ function wedge_square_coords_cjet(n_wedges, wedge_index, uv)
 end
 
 # (st, 1−s from the next corner) = i + (−i)·w: holomorphic, coefficients exact
-next_corner_cjet(j::CJet) = CJet(complex(imag(j.w0), 1 - real(j.w0)),
+@inline next_corner_cjet(j::CJet) = CJet(complex(imag(j.w0), 1 - real(j.w0)),
                                  complex(imag(j.w1), -real(j.w1)),
                                  complex(imag(j.w2), -real(j.w2)),
                                  complex(imag(j.w3), -real(j.w3)))
 
-function square_coords_to_chart_cjet(n_wedges, wedge_index, stj::CJet)
+@inline function square_coords_to_chart_cjet(n_wedges, wedge_index, stj::CJet)
     C = carrier(real(stj.w0))
     z = cpow_jet(cjet_rdiv(stj, C(sqrt(2))), 4 / n_wedges)
     s, c = sincos(C(2pi * wedge_index / n_wedges))
     cjet_scale(complex(c, s), z)
 end
 
-function corner_contribution_jet(chart, corner, stj::CJet)
+@inline function corner_contribution_jet(chart, corner, stj::CJet)
     sj = re_jet(stj)
     tj = im_jet(stj)
     bs = compose1(blend_jet(sj.f)..., sj)
@@ -145,7 +145,7 @@ end
 order-3 (u,v) jet of surface(): value lane bit-identical to surface(), the ten
 derivative lanes closed-form. christoffel assembles g and ∂g from this.
 """
-function surface_jet(env, chart, uv)
+@inline function surface_jet(env, chart, uv)
     n = valence(chart)
     k = wedge_index(n, primal.(uv))
     corner = ccw(half_edge_handle(chart), k)

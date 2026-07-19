@@ -2,7 +2,7 @@
 # christoffels, phase settling across chart/half transitions, and the two
 # tracers (fixed-step RK4, error-controlled DP5(4)).
 
-function collar(env, chart, pos) # surface point pushed inward: s(u,v) − d·n̂(u,v)
+@inline function collar(env, chart, pos) # surface point pushed inward: s(u,v) − d·n̂(u,v)
     uv = SVector(pos[1], pos[2])
     val, jac = value_and_jacobian_columns(situate(surface, env, chart), uv, Val(2))
     val - pos[3] * normal_from_columns(jac)
@@ -63,7 +63,7 @@ end
 # inner metric d-free, depth blend a scalar 1D chain). The AD twin above and
 # reference.jl are the oracles; this is what runs in production and in-kernel.
 
-function normal_jet(sj::Jet3) # unit outward normal as an order-2 jet: normalize(su × sv)
+@inline function normal_jet(sj::Jet3) # unit outward normal as an order-2 jet: normalize(su × sv)
     cj = leibniz(cross, jdu(sj), jdv(sj))
     m2 = leibniz(dot, cj, cj)
     s0 = sqrt(m2.f)
@@ -71,10 +71,10 @@ function normal_jet(sj::Jet3) # unit outward normal as an order-2 jet: normalize
     jdiv(cj, nr)
 end
 
-sym3(a11, a12, a13, a22, a23, a33) =
+@inline sym3(a11, a12, a13, a22, a23, a33) =
     SMatrix{3, 3}(a11, a12, a13, a12, a22, a23, a13, a23, a33)
 
-function outer_metric_gradient(sj::Jet3, d)
+@inline function outer_metric_gradient(sj::Jet3, d)
     nj = normal_jet(sj)
     nu = jdu(nj); nv = jdv(nj)
     su = jdu(sj); sv = jdv(sj)
@@ -94,7 +94,7 @@ function outer_metric_gradient(sj::Jet3, d)
     (g, dgu, dgv, dgd)
 end
 
-function inner_metric_gradient(sj::Jet3, prm, C)
+@inline function inner_metric_gradient(sj::Jet3, prm, C)
     cs = C(prm.cross_scale)
     su = jdu(sj); sv = jdv(sj)
     z = zero(cs)
@@ -108,7 +108,7 @@ function inner_metric_gradient(sj::Jet3, prm, C)
     (g, dgu, dgv)
 end
 
-function christoffel_from(g, dgu, dgv, dgd, C)
+@inline function christoffel_from(g, dgu, dgv, dgd, C)
     dg = (dgu, dgv, dgd) # dg[c][a,b] = ∂g_ab/∂x_c
     inv_m = inv(g)
     half = C(0.5)
@@ -120,7 +120,7 @@ function christoffel_from(g, dgu, dgv, dgd, C)
     end)
 end
 
-function christoffel(env, v::SituatedPhase)
+@inline function christoffel(env, v::SituatedPhase)
     pos = v.pos
     C = carrier(pos[1])
     prm = params(half_throat(v.chart))
@@ -147,9 +147,9 @@ function christoffel(env, v::SituatedPhase)
 end
 
 # the transport law's right-hand side: covariant rate of w carried along vel
-christoffel_pull(Γ, vel, w) = SVector{3}(ntuple(k -> -sum(vel[i] * w[j] * Γ[k, i, j] for i in 1:3, j in 1:3), Val(3)))
+@inline christoffel_pull(Γ, vel, w) = SVector{3}(ntuple(k -> -sum(vel[i] * w[j] * Γ[k, i, j] for i in 1:3, j in 1:3), Val(3)))
 
-function wvel_along_v(env, v::SituatedPhase, w::SituatedPhase)
+@inline function wvel_along_v(env, v::SituatedPhase, w::SituatedPhase)
     christoffel_pull(christoffel(env, v), v.vel, w.vel)
 end
 

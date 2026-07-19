@@ -4,6 +4,122 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-18 — execution engineering opens: the 19.2K local was ABI call-frame stack, not live state; @inline tree collapse buys 31% kernel / 15% CPU; occupancy is NOT the gate
+
+**Context.** Kaarel's call: set bundles/caches aside, see how far pure
+execution engineering goes. Attack order agreed: profile first, rank levers
+with data. No ncu/nsys on the box, so instrumentation was host-side (an
+instrumented copy of run_wavefront! timing every stage per round) plus PTX
+census. Workload throughout: the physics_diff cube, 768×576, F32, sweep=64
+bin, RayBudget(0.05, 400, 4), RTX 4070 SUPER (56 SMs), 16 host threads.
+
+**Wall decomposition (pre-change baseline).** Wall 0.649 s excluding pool
+init: kernel 90%, per-round entry solves 0.5%, transfers+gather+scatter+sort
++compact ≈ 1.5%. Two corrections to the 2026-07-16 addendum's reading:
+
+- The "~20% host" gap between wall and kernel-only is the **initial** pool
+  fill (442k F64 first-entry solves + device throat build + transfers), not
+  the per-round entry stage. Still pipelinable, now correctly attributed.
+- Only 65,114 of 442,368 pixels enter the throat at all (this camera); 94%
+  of entrants finish their passage within the first 64-attempt sweep.
+
+The kernel time splits into two regimes with different physics:
+
+    round  active  entries  kernel_ms      round  active  entries  kernel_ms
+        1   65114    61465     313.5           5     309       69      50.4
+        2    3649     3033      54.7           6     240       54      51.5
+        3     616      167      49.6           7     186        5      13.2
+        4     449      140      50.5
+
+  Rounds 2–7 = 46% of kernel time for <6% of rays, ~50 ms/round *regardless
+  of active count*: a 64-attempt round costs the same for 616 rays as for
+  3649. That is per-attempt serial latency ~0.8 ms — local-memory traffic at
+  raw L2/DRAM latency, unhidden. The stragglers are almost exactly the 181
+  budget-capped unresolved pixels (side==0) burning 400 sequential attempts.
+  Ray lifetimes: q50 1 round, q99 2, max 7 (the budget ceiling).
+
+**Occupancy is not the gate** (twice measured). maxregs ∈ {128, 96, 64} ×
+threads ∈ {128, 256, 512}: every register cap makes the kernel *slower*
+(freed registers just move to local: 255→128 regs adds +496 B spill), both
+at the 19.2K baseline and at the 14.0K post-change footprint. Doubling
+theoretical occupancy does nothing because the kernel is bandwidth-bound on
+its own local traffic (19.2 KB × 14.3k resident threads ≈ 275 MB streamed
+per wave). One real scheduling nugget: threads=128 beats 256 by ~6% kernel
+(0.364 vs 0.388 post-change) — finer blocks spread the tiny tail rounds
+across more SMs. Candidate DeviceSweep default.
+
+**Where the 19.2 KB actually lived.** PTX census (`CUDA.@device_code`; the
+.asm dump is full PTX): Julia-codegen `__local_depot`s total just 656 B —
+everything else is **ABI call-frame stack** along the deepest chain:
+sweep_ray 7856 B → dopri_step 6776 → settle_phase 4064 → geodesic_step 3024
+→ surface_jet 2128 → surface 1968 → chart_transition 1320 → christoffel 900
++ jet leaves (corner_contribution_jet 616, normal_jet 336, …). 224 call
+sites, ~1300 st.local + ~1100 ld.local static: every call passes/returns
+aggregates (Jet3 of SVector{3} = 30 floats, metric triples, the ~500 B
+by-value Chart handle) through local memory. The 2026-07-16 attribution
+("remaining local is integrator state + record") was wrong — it was call
+ABI, mostly eliminable at the language level. Also seen: 49 call sites to
+throw_boundserror; `--check-bounds=no` was measured and is a dud (−176 B,
+−3% kernel, raymaps bit-identical) — bounds checks are not the cost.
+
+**The lever that paid: @inline the christoffel tree into flow6.** Annotated
+(src/chart.jl, jets.jl, throat.jl, geodesic.jl): the wedge chain
+(safe_atan2, fake_complex_pow, wedge_index/square coords/to_chart + cjet
+variants), corner/surface evaluators (polynomial_surface,
+corner_contribution[_jet], surface, surface_jet), jet algebra (jadd, jdu/v,
+leibniz, jdiv, cjet ops, cpow_jet, wirtinger_compose, flat_bump[_jet],
+blend_scalar/blend_jet, eval_packed[_partials]), metric assembly (collar,
+normal_jet, sym3, outer/inner_metric_gradient, christoffel_from,
+christoffel, christoffel_pull, wvel_along_v). The structural frames
+(sweep_ray, dopri_step, settle_phase, flow6, chart_transition, to_ambient)
+stay ABI calls; flow6 remains the single cheap crossing (6 floats in/out).
+Result: local 19,232 → **13,968 B/thread**, kernel 0.560 → **0.386 s**
+(−31%), both regimes uniformly (round 1: 313→209 ms; tail rounds 50→33 ms).
+Wall 0.712 → 0.535–0.57. The tree now sits in flow6's 1808 B frame (was
+~4.5K spread over five layers). CPU wins too (192×144: recursive
+0.154→0.129, wavefront F32 0.095→0.081 — same call-frame arithmetic, x86
+edition).
+
+**The blowup boundary, mapped.** `always_inline=true`: 187,936 B/thread,
+launch OOMs — LLVM/ptxas cannot share stack slots across branches at that
+scale. Inlining the next layer up (dopri_step/settle_phase/to_ambient/
+chart_transition into sweep_ray): 126,672 B, same OOM — to_ambient drags the
+AD collar tree (the dual-pass exit path, still ForwardDiff by design) into
+the union. Inlining just flow6 into dopri_step: 21,480 B, kernel unchanged —
+footprint up, no traffic win. The sweet spot is exactly "leaves collapsed
+into flow6, structural frames separate," and it is now occupied.
+
+**Certification.** 451 tests cold green. physics_diff: 0 side flips, worst
+deviation 6.61e-15 cube / 1.61e-10 trefoil — *moved* from 8.1e-15 / 1.26e-10
+(CPU arithmetic shifted at the muladd/fusion level once inlined; StaticArrays
+uses muladd internally), still inside the 1e-9 band; this is the "stacking
+reordering" case the 2026-07-16 note anticipated — re-baseline when the next
+optimization lands on top. gpu_tracer parity re-run: F64 device vs CPU 0
+flips, 23,581/27,639 bit-identical (same count as 2026-07-16), max 3.6e-11
+rad; F32 in the 14c band. Device pre-vs-post (same precision, same tables):
+0 flips, 94% bit-identical, q99 4e-7, max 1.4e-3 rad on one
+boundary-filament ray — the NVPTX backend contracts/schedules differently
+across former call boundaries, so device-side bit-stability across kernel
+versions is not a thing @inline preserves (it was never a certified
+invariant; parity is judged by the 14c decomposition).
+
+**Lever ranking after this session** (next targets, in order):
+
+1. **sweep_ray's own 7.9K frame** — unchanged by the collapse and now the
+   biggest; its ld/st traffic runs per attempt iteration (record staging,
+   chart handle, h/steps state around the dopri call). Census its body,
+   then either slim what crosses the dopri_step boundary or restructure the
+   loop so the hot state stays in registers.
+2. **Tail rounds: 46% of kernel serves <1% of rays.** Per-attempt serial
+   latency improved 50→33 ms/round but the structure stands. Candidates:
+   CPU tail handoff — after round ~2, ship the few hundred stragglers to
+   host threads (the sweep_stage! seam makes backend-per-round trivial; a
+   400-attempt straggler is ~1 ms serial on CPU vs ~200 ms on device);
+   budget-as-deadline for realtime; threads=128 as a free 6%.
+3. **Pool-init overlap** — the ~0.15 s of initial F64 entry solves +
+   device-throat build, pipelinable against round 1 (or an in-kernel entry
+   solve; the F64 host solve was a design convenience, not a requirement).
+
 ## 2026-07-17 — unresolved-pixel budget escalation: retracing only the side==0 pixels under doubled budgets clears the approach for ~30% extra wall, and the mid-crossing filament band shrinks ~2x per doubling
 
 **What was measured.** flyvideo.jl now escalates per frame: after the normal

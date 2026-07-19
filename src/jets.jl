@@ -39,24 +39,24 @@ struct Jet3{V}
     fvvv::V
 end
 
-jadd(a::Jet3, b::Jet3) = Jet3(a.f + b.f, a.fu + b.fu, a.fv + b.fv,
+@inline jadd(a::Jet3, b::Jet3) = Jet3(a.f + b.f, a.fu + b.fu, a.fv + b.fv,
                               a.fuu + b.fuu, a.fuv + b.fuv, a.fvv + b.fvv,
                               a.fuuu + b.fuuu, a.fuuv + b.fuuv, a.fuvv + b.fuvv, a.fvvv + b.fvvv)
 
 # ∂u/∂v as jets one order down: how a jet's own derivative enters chain rules
-jdu(a::Jet3) = Jet2(a.fu, a.fuu, a.fuv, a.fuuu, a.fuuv, a.fuvv)
-jdv(a::Jet3) = Jet2(a.fv, a.fuv, a.fvv, a.fuuv, a.fuvv, a.fvvv)
-jdu(a::Jet2) = Jet1(a.fu, a.fuu, a.fuv)
-jdv(a::Jet2) = Jet1(a.fv, a.fuv, a.fvv)
+@inline jdu(a::Jet3) = Jet2(a.fu, a.fuu, a.fuv, a.fuuu, a.fuuv, a.fuvv)
+@inline jdv(a::Jet3) = Jet2(a.fv, a.fuv, a.fvv, a.fuuv, a.fuvv, a.fvvv)
+@inline jdu(a::Jet2) = Jet1(a.fu, a.fuu, a.fuv)
+@inline jdv(a::Jet2) = Jet1(a.fv, a.fuv, a.fvv)
 
 # Leibniz rule for any bilinear op (*, dot, cross): the one product rule,
 # parameterized by the pairing
-leibniz(op, a::Jet1, b::Jet1) = Jet1(
+@inline leibniz(op, a::Jet1, b::Jet1) = Jet1(
     op(a.f, b.f),
     op(a.fu, b.f) + op(a.f, b.fu),
     op(a.fv, b.f) + op(a.f, b.fv))
 
-leibniz(op, a::Jet2, b::Jet2) = Jet2(
+@inline leibniz(op, a::Jet2, b::Jet2) = Jet2(
     op(a.f, b.f),
     op(a.fu, b.f) + op(a.f, b.fu),
     op(a.fv, b.f) + op(a.f, b.fv),
@@ -64,7 +64,7 @@ leibniz(op, a::Jet2, b::Jet2) = Jet2(
     op(a.fuv, b.f) + op(a.fu, b.fv) + op(a.fv, b.fu) + op(a.f, b.fuv),
     op(a.fvv, b.f) + 2 * op(a.fv, b.fv) + op(a.f, b.fvv))
 
-leibniz(op, a::Jet3, b::Jet3) = Jet3(
+@inline leibniz(op, a::Jet3, b::Jet3) = Jet3(
     op(a.f, b.f),
     op(a.fu, b.f) + op(a.f, b.fu),
     op(a.fv, b.f) + op(a.f, b.fv),
@@ -78,7 +78,7 @@ leibniz(op, a::Jet3, b::Jet3) = Jet3(
 
 # quotient a/b (b scalar-valued), solved order by order from a = q·b; the value
 # lane is the same division the plain evaluator performs
-function jdiv(a::Jet2, b::Jet2)
+@inline function jdiv(a::Jet2, b::Jet2)
     q = a.f / b.f
     qu = (a.fu - q * b.fu) / b.f
     qv = (a.fv - q * b.fv) / b.f
@@ -88,7 +88,7 @@ function jdiv(a::Jet2, b::Jet2)
          (a.fvv - 2 * (qv * b.fv) - q * b.fvv) / b.f)
 end
 
-function jdiv(a::Jet3, b::Jet3)
+@inline function jdiv(a::Jet3, b::Jet3)
     q = a.f / b.f
     qu = (a.fu - q * b.fu) / b.f
     qv = (a.fv - q * b.fv) / b.f
@@ -132,18 +132,18 @@ struct CJet{T}
     w3::Complex{T}
 end
 
-cjet_identity(uv) = CJet(complex(uv[1], uv[2]), complex(one(uv[1]), zero(uv[1])),
+@inline cjet_identity(uv) = CJet(complex(uv[1], uv[2]), complex(one(uv[1]), zero(uv[1])),
                          complex(zero(uv[1]), zero(uv[1])), complex(zero(uv[1]), zero(uv[1])))
 
-cjet_scale(a, j::CJet) = CJet(a * j.w0, a * j.w1, a * j.w2, a * j.w3)
-cjet_rdiv(j::CJet, a) = CJet(j.w0 / a, j.w1 / a, j.w2 / a, j.w3 / a)
+@inline cjet_scale(a, j::CJet) = CJet(a * j.w0, a * j.w1, a * j.w2, a * j.w3)
+@inline cjet_rdiv(j::CJet, a) = CJet(j.w0 / a, j.w1 / a, j.w2 / a, j.w3 / a)
 
-re_jet(j::CJet) = Jet3(real(j.w0),
+@inline re_jet(j::CJet) = Jet3(real(j.w0),
                        real(j.w1), -imag(j.w1),
                        real(j.w2), -imag(j.w2), -real(j.w2),
                        real(j.w3), -imag(j.w3), -real(j.w3), imag(j.w3))
 
-im_jet(j::CJet) = Jet3(imag(j.w0),
+@inline im_jet(j::CJet) = Jet3(imag(j.w0),
                        imag(j.w1), real(j.w1),
                        imag(j.w2), real(j.w2), -imag(j.w2),
                        imag(j.w3), real(j.w3), -imag(j.w3), -real(j.w3))
@@ -154,7 +154,7 @@ arithmetic (chart.jl); derivatives are the recurrence φ⁽ᵏ⁺¹⁾ = (p−k)
 chained with the incoming jet by 1D Faà di Bruno. Zero at the origin like
 fake_complex_pow (same guard, derivative lanes zero there too).
 """
-function cpow_jet(j::CJet, power)
+@inline function cpow_jet(j::CJet, power)
     z0 = j.w0
     if iszero(primal(real(z0))) && iszero(primal(imag(z0)))
         zc = zero(z0)
@@ -178,7 +178,7 @@ order-3 jet of real-valued p∘ζ with ζ holomorphic: p's ten (x,y) partials at
 through w and ∂z̄ only through w̄, so the bivariate chain rule factorizes into
 two 1D chains; p real makes D_ab = conj(D_ba), leaving five D terms.
 """
-function wirtinger_compose(pd, z1, z2, z3)
+@inline function wirtinger_compose(pd, z1, z2, z3)
     f, fx, fy, fxx, fxy, fyy, fxxx, fxxy, fxyy, fyyy = pd
     P10 = complex(fx, -fy) / 2
     P20 = complex(fxx - fyy, -2 * fxy) / 4
@@ -208,7 +208,7 @@ closed form. Gated on the value: once exp underflows (or x ≤ 0) every
 derivative is zero too — and the gate keeps 0·Inf out of Float32 near seams,
 where 1/x powers overflow long before the product stops being zero.
 """
-function flat_bump_jet(x)
+@inline function flat_bump_jet(x)
     z = zero(x)
     primal(x) > 0 || return (z, z, z, z)
     b = exp(-1 / x)
@@ -225,7 +225,7 @@ blend_scalar and its first three derivatives: fb(1−x)/(fb(x)+fb(1−x)) with t
 (1−x) sign flips folded in, then the 1D quotient solved order by order. The
 value lane is blend_scalar's exact arithmetic.
 """
-function blend_jet(x)
+@inline function blend_jet(x)
     a = flat_bump_jet(1 - x)
     b = flat_bump_jet(x)
     n1 = a[1]; n2 = -a[2]; n3 = a[3]; n4 = -a[4]
@@ -244,7 +244,7 @@ its derivatives along (Aₖ₊₁ = Aₖ·x + c ⇒ A′ₖ₊₁ = A′ₖ·x +
 Returns three (f, fx, fy, fxx, fxy, fyy, fxxx, fxxy, fxyy, fyyy) tuples; the
 f lane is eval_packed's exact arithmetic.
 """
-function eval_packed_partials(packed::AbstractArray{<:AbstractFloat, 3}, x, y)
+@inline function eval_packed_partials(packed::AbstractArray{<:AbstractFloat, 3}, x, y)
     ntuple(Val(3)) do component
         z = zero(x) * zero(y)
         m00 = z; m10 = z; m20 = z; m30 = z

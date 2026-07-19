@@ -30,12 +30,18 @@ certified against it; the jet christoffel against its AD twin
 ulps). F32 is accepted end-to-end by kaarel's decomposition metric
 (measurements.md 2026-07-14c, re-confirmed post-jets 2026-07-16).
 
-Perf state (measurements.md 2026-07-16): the hand-rolled derivative lever
-paid out on both platforms — CPU christoffel 12.3x, whole renders 11.5–12.5x
-(cube 192×144 raymap ~0.10–0.15 s at 16 threads), device kernel 21.5x F64 /
-34x F32. Device F32 reaches 16-thread-CPU parity at 384×288 and is **2.1x
-ahead at 768×576**: resolution alone feeds the card, so no GPU throughput
-lever remains on the critical path. The production Γ path is AD-free
+Perf state (measurements.md 2026-07-16, updated 2026-07-18): the
+hand-rolled derivative lever paid out on both platforms — CPU christoffel
+12.3x, whole renders 11.5–12.5x, device kernel 21.5x F64 / 34x F32; device
+F32 2.1x ahead of 16-thread CPU at 768×576. The 2026-07-18 execution
+session added the @inline tree collapse (christoffel tree into flow6's
+frame): device F32 kernel 0.560 → 0.386 s at 768×576 (wall ~0.54), local
+19.2K → 14.0 KB/thread, CPU renders another ~15% (192×144 wavefront F32
+0.095 → 0.081). Standing diagnosis: the kernel is bandwidth-bound on its
+own ABI-stack local traffic, NOT occupancy-limited (register caps measured
+twice, always lose); kernel time is two regimes — a throughput-bound first
+round and latency-bound straggler tail rounds (46% of kernel for <1% of
+rays, the budget-capped filament pixels). The production Γ path is AD-free
 closed-form, which also settles shader portability.
 
 Latest flight work (2026-07-17 video session): flyvideo.jl carries the full
@@ -63,13 +69,24 @@ The perf/quality path is ordered (agreed with kaarel, 2026-07-17b; a priori
 cost analysis in that session's log). Headline of the analysis: the physics
 doesn't price out realtime — ~2 orders of magnitude of pure execution
 headroom on the device path (spill, wave tails, host entry), another 1–2
-algorithmic orders in smooth regions of the exit map, and an irreducible
-core (first hit + chaotic filament integration) that fits interactive
+algorithmic orders in smooth regions of the exit map, and a hard core
+(first hit + chaotic filament integration) that fits interactive
 budgets everywhere except mid-crossing frames, where budget-as-frame-
 deadline degradation (semantics RayBudget already has) is available and
 perceptually honest — the filament is where the image already aliases.
+(The core is "irreducible" only up to Lyapunov-limited depth: the
+section-cache idea under item 2 attacks it directly.)
 
-1. **Jacobi-field ray bundles (DNGR-style) — first.** Trace sparse rays +
+**Reordered 2026-07-18 (kaarel's call): item 3 — GPU execution
+engineering — is active now**, invoking the reordering trigger below;
+bundles and caches are set aside to see how far execution alone goes.
+Scoring note (kaarel's correction, 2026-07-18): execution engineering
+helps *both* the realtime-authoring endpoint and offline renders — device
+F32 already beats 16-thread CPU at production resolutions, and offline
+video benefits as soon as flyvideo grows a GPU path (deferred item from
+2026-07-17).
+
+1. **Jacobi-field ray bundles (DNGR-style).** Trace sparse rays +
    geodesic deviation κ; interpolate where the exit map is smooth,
    subdivide near critical rings — 10–100x fewer rays and principled
    antialiasing. The keystone item: κ is simultaneously the shimmer answer
@@ -77,7 +94,19 @@ perceptually honest — the filament is where the image already aliases.
    below need, and the endgame F32→F64 fallback flag (passage count stays
    the cheap ordinal until then). Backend-agnostic (CPU video renders drop
    from hours toward minutes) and representation-agnostic (survives the
-   fork) — highest information value, no dependencies.
+   fork) — highest information value, no dependencies. Design notes from
+   the 2026-07-18 DNGR discussion (kaarel checked the paper: DNGR bundles
+   are one-per-pixel for filtering/quality; the sparse-ray reading is
+   ours, at a scale whose linearization validity must be *checked*): trust
+   is pairwise Hermite consistency between neighboring bundles plus
+   discrete agreement (side, passage count) — never pointwise κ alone,
+   since folds can hide between samples; land the architecture with
+   finite-difference bundles (2 offset rays, no new machinery) before
+   extending jets to order-4 for the true Jacobi equation (κ needs
+   accuracy only in smooth regions, where FD is fine; in the chaotic band
+   it only needs to be large, to veto interpolation); the speedup claim is
+   conditional — 10–100x on smooth-dominated frames, ~break-even-but-
+   antialiased at peak crossing, frame budget as the floor.
 2. **Scattering-map caches — second, pulled by demand** (they pay when
    geometry is static across many frames, i.e. the authoring loop; softly
    gated on the representation fork since tables bake the current charts).
@@ -94,17 +123,58 @@ perceptually honest — the filament is where the image already aliases.
    geodesics), flagged like the critical rings. Composition compounds
    interpolation error, so table cells carry the κ trust criterion from
    item 1. (Absorbs the former standalone cylinder-product CPU lever.)
-3. **GPU execution engineering — last**, because it's mechanical, doesn't
-   change images, and multiplies whatever algorithm exists — tune it after
-   the workload shape settles. Known gaps: register/local pressure,
-   persistent threads pulling from the pool queue (wave quantization +
-   compaction tails), host/device overlap of entry solves (~20% of wall at
-   442k rays) or an F32/in-kernel entry solve (the F64 host solve was a
-   14c design convenience, never a requirement — kaarel 2026-07-17), frame
-   batching for offline video (latency-hostile in realtime). Reordering
-   trigger: if kaarel wants the realtime flying-controls authoring soon,
-   this jumps ahead of 2 — bundles + GPU likely reach interactive rates
-   without any cache.
+   **Upgrade (kaarel's loop-cut idea, 2026-07-18): index the in-throat
+   table by Poincaré sections instead of time steps.** Sections = (a few
+   well-chosen loop cuts of the mesh) × (d-interval), chosen so every
+   trapped geodesic crosses the family infinitely often (a complete
+   system of sections, Birkhoff's construction; sufficient condition:
+   each complement patch of the loop family contains no complete surface
+   geodesic — patches inside convex normal balls guarantee it; empirical
+   probe: seed long surface geodesics, measure max sojourn between
+   crossings). This makes the ḋ≈0 trapped set *interior* to the table
+   domain (the return map doesn't care that d isn't progressing — the
+   singularity was an artifact of time parametrization), and the product
+   structure collapses the table to a 2D-domain return map
+   (s,θ) → (s′,θ′, next-loop-id, arc length σ), with d′ = d + ḋσ/√(1−ḋ²)
+   exact and ḋ constant. Per-crossing error can be pushed below
+   per-winding RK4 error at trivial memory cost, and the Lyapunov
+   amplification per winding hits integration and table-iteration
+   identically — so where the table wins the per-winding ε comparison,
+   the cache is *more* accurate than integration, not a lossy shortcut.
+   Caveats: composed expansion is still the depth limit (store the return
+   map's Jacobian per cell — the item-1 bundle data — as the trust flag);
+   tangency boundaries (grazing crossings) flag cells for integration
+   fallback; valid only where the metric is d-free, which is exactly
+   where the winding tail lives. Attacks the cost analysis's "irreducible
+   core" directly — softens it to Lyapunov-limited depth.
+3. **GPU execution engineering — ACTIVE as of 2026-07-18** (was "last,
+   because it's mechanical, doesn't change images, and multiplies whatever
+   algorithm exists"; kaarel invoked the reordering to see how far
+   execution alone goes). Attack order for the phase (agreed 2026-07-18):
+   profile first (instrumented wall decomposition + per-round series +
+   ray-lifetime histogram at 768×576 F32, plus a maxregs × threads/block
+   launch-config sweep), then rank the levers with data. **Phase 1 done
+   (measurements.md 2026-07-18)**: the profiling landed and the first
+   lever paid — the 19.2K local/thread was ABI call-frame stack, the
+   @inline tree collapse into flow6 bought 31% kernel / 15% CPU, and
+   occupancy was ruled out as the gate (bandwidth on local traffic is;
+   register caps lose, measured twice; the blowup boundary is mapped —
+   inlining the structural layer OOMs at 127–188 KB/thread). Ranked next
+   targets: (a) sweep_ray's own 7.9K frame, the biggest remaining, its
+   traffic per attempt iteration; (b) the straggler tail — 46% of kernel
+   serves <1% of rays at ~0.5 ms serial latency per attempt: CPU tail
+   handoff via the sweep_stage! seam (a 400-attempt straggler is ~1 ms
+   serial on host vs ~200 ms on device), budget-as-deadline for realtime,
+   threads=128 as a free 6%; (c) pool-init overlap — the wall-vs-kernel
+   gap is the *initial* 442k F64 entry solves + device throat build
+   (per-round entries are 0.5%; the old ~20% attribution corrected),
+   pipelinable against round 1, or an F32/in-kernel entry solve (the F64
+   host solve was a 14c design convenience, never a requirement — kaarel
+   2026-07-17). Frame batching for offline video unchanged
+   (latency-hostile in realtime). Persistent threads demoted: the tail is
+   latency-bound, not wave-quantized, so a queue doesn't fix it.
+   Reordering trigger (served 2026-07-18): this item now runs ahead of
+   1–2.
 
 Unordered, as wanted:
 
