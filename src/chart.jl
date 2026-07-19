@@ -33,6 +33,10 @@ end
 
 @inline function wedge_index(n_wedges, pos)
     α = atan(pos[2], pos[1])
+    # NaN pos (an F32 ray mid-blowup) must not throw InexactError below — on
+    # device a thrown exception kills the whole launch. Any wedge is as good as
+    # any other for a ray that is already NaN; it dies as RAY_UNRESOLVED.
+    isfinite(α) || return 0
     Int(mod(floor((α * n_wedges)/(2pi)), n_wedges))
 end
 

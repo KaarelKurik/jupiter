@@ -58,9 +58,15 @@ function sweep_ray(env, throat, budget, r::WavefrontRay{T}, sweep) where {T}
     v = SituatedPhase(chart, r.pos, r.vel)
     steps = r.steps
     h = r.h
+    # a non-finite phase (F32 blowup, filament class) can never resolve: retire
+    # it as RAY_UNRESOLVED instead of burning budget on NaN arithmetic (or, on
+    # device, throwing in-kernel). Control flow only — never fires on finite
+    # rays, so F64 bit-identity with trace_geodesic is untouched.
+    finite(p) = isfinite(sum(p.pos) + sum(p.vel))
     if budget.tolerance > 0
         tol = T(budget.tolerance)
         for _ in 1:sweep
+            finite(v) || return throat_state(RAY_UNRESOLVED, v, r.passages, steps, h)
             h = min(h, T(0.25) / (maximum(abs, v.vel) + T(1e-12)))
             u = vcat(SVector{3}(v.pos), SVector{3}(v.vel))
             u5, err = dopri_step(env, v.chart, u, h)
@@ -76,6 +82,7 @@ function sweep_ray(env, throat, budget, r::WavefrontRay{T}, sweep) where {T}
         end
     else
         for _ in 1:sweep
+            finite(v) || return throat_state(RAY_UNRESOLVED, v, r.passages, steps, h)
             v = settle_phase(env, geodesic_step(env, v, h))
             steps += Int32(1)
             exits_mouth(v) && return ambient_state(to_ambient(env, v), r.passages, h)

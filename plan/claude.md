@@ -51,6 +51,16 @@ retraced under doubled budgets; measurements.md 2026-07-17), and
 `exit_placement()`, the first non-identity Placement in use (side-2
 embedding rotated so the outro flies at the destination sky's hero
 feature — kaarel's call: author the embedding frame, never the sky asset).
+**2026-07-18: flyvideo grew `gpu=1`** (run under --project=gpu): frame
+raymaps trace on the device in F32; coast/probes/escalation stay CPU F64,
+so the flight path is bit-identical to CPU runs and escalated pixels land
+at F64. Wiring it surfaced a latent F32 bug in the *CPU* wavefront too
+(NaN rays threw InexactError in wedge_index; on device one such ray killed
+the launch) — fixed by guards that retire non-finite rays as
+RAY_UNRESOLVED into the standing escalation machinery (measurements.md
+2026-07-18b). Note the 07-17 space flythrough ran recursive/F64/CPU — the
+production video path had never used the wavefront driver, F32, or the
+card until now.
 Real skies live as tracked JPGs in res/textures/ (skybox[12].jpg CC0
 nature panoramas; space[12].jpg from kaarel's manual_wormhole bg0/bg1
 cubemaps via scripts/cube2equirect.jl); frame PPMs land in out/frames/.

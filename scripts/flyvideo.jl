@@ -24,6 +24,12 @@
 #   magick res/textures/space2.jpg out/space2.ppm
 #   julia --project --threads=auto scripts/flyvideo.jl [WxH] [uniform=Δτ] [scene=trefoil]
 #       [sky1=out/space1.ppm sky2=out/space2.ppm] [unres=0.005] [esc=3]
+# gpu=1 (run under --project=gpu): frame raymaps trace on the device in F32
+# against F32-rounded tables (entry solves stay F64 against the F32-coefficient
+# surface — the 14c seam). Flight dynamics, flow probes, and escalation retraces
+# stay CPU F64, so the flight path is bit-identical to a cpu run and escalated
+# pixels land at F64:
+#   julia --project=gpu --threads=auto scripts/flyvideo.jl [args...] gpu=1
 using jupiter
 using LinearAlgebra
 const J = jupiter
@@ -55,6 +61,14 @@ const Δτ_floor = argval("floor", 0.004) # hard floor: below this, motion is sh
 const frame_cap = 1200                # absolute runaway guard
 const probe_w, probe_h = 16, 12
 const coast_h = 0.02
+const use_gpu = argval("gpu", 0.0) > 0
+use_gpu && include(joinpath(root, "gpu", "jupitergpu.jl")) # brings CUDA; needs --project=gpu
+
+# F32-rounded packed tables on the same mesh/params/placements: what the device
+# traces against, and what the F64 entry solves see (the 14c precision seam)
+f32_throat(th) = J.Throat(J.Surface(J.mesh(J.geometry(th)), J.chart_polys(J.geometry(th)),
+                                    [Float32.(p) for p in J.packed_polys(J.geometry(th))]),
+                          J.params(th), th.placements)
 
 # angular feature motion between probes: median, q90, max, and the side-flip
 # fraction. The controller steers on the MEDIAN: near the mouth the
@@ -155,6 +169,31 @@ function main()
     cam = J.FlyingCamera(J.AmbientRay(J.HalfThroat(th, 1), campos, fwd),
                          J.SMatrix{3, 3, Float64}([right cross(right, fwd) fwd]))
 
+    # device render path (gpu=1): the full-res frame raymaps run the wavefront
+    # driver with the sweep stage on the card, one DeviceSweep reused across
+    # frames (device throat uploaded once). Everything else — coast, probes,
+    # refine! escalation — stays on the CPU F64 scene.
+    render_scene, sweep_stage = scene, nothing
+    if use_gpu
+        th32 = f32_throat(th)
+        render_scene = J.Scene(th32, (J.TessellatedMouth(nothing, J.HalfThroat(th32, 1), tess),
+                                      J.TessellatedMouth(nothing, J.HalfThroat(th32, 2), tess)), sky)
+        sweep_stage = jupitergpu.DeviceSweep(jupitergpu.device_throat(th32, Float32))
+    end
+    function render_keyframe(c) # keyframe_raymap's camera dispatch, device edition
+        use_gpu || return J.keyframe_raymap(nothing, scene, budget, c, thf, w, h)
+        if c.state isa J.AmbientRay
+            J.wavefront_raymap(nothing, render_scene, budget,
+                               J.Camera(c.state.pos, c.frame, thf),
+                               J.side(J.half_throat(c.state)), w, h;
+                               T = Float32, sweep = 64, bin = true, sweep_stage! = sweep_stage)
+        else # emission stays on the F64 chart (host); the record traces in F32 like the CPU F32 wavefront
+            J.wavefront_raymap(nothing, render_scene, budget,
+                               J.SituatedCamera(c.state.chart, c.state.pos, c.frame, thf),
+                               w, h; T = Float32, sweep = 64, bin = true, sweep_stage! = sweep_stage)
+        end
+    end
+
     probe(c) = J.keyframe_raymap(nothing, scene, budget, c, thf, probe_w, probe_h)
     where(c) = c.state isa J.AmbientRay ?
         "ambient$(J.side(J.half_throat(c.state)))" : "chart d=$(round(c.state.pos[3], digits=2))"
@@ -185,7 +224,7 @@ function main()
         end
         τ += Δτ
         frame += 1
-        raymap = J.keyframe_raymap(nothing, scene, budget, cam, thf, w, h)
+        raymap = render_keyframe(cam)
         unres0, esc_budget, escs = count(==(0), raymap.side), budget, 0
         while count(==(0), raymap.side) > unres_max * w * h && escs < esc_max
             esc_budget = J.RayBudget(esc_budget.step_size, 2 * esc_budget.max_steps,
@@ -207,6 +246,7 @@ function main()
         uniform > 0 || (Δτ = clamp(Δτ * clamp(0.85 * θ_target / (medflow + 1e-9), 0.6, 1.8), Δτ_floor, 0.4))
     end
     println(frame, " frames over τ=", τ_total, " in ", round((time() - t0) / 60, digits=1), " min")
+    use_gpu && println("device kernel total ", round(sweep_stage.kernel_seconds[], digits=1), " s")
 end
 
 main()

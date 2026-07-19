@@ -4,6 +4,54 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-18b — flyvideo grows gpu=1; the first F32 flight finds a latent crash in the certified CPU wavefront; GPU 2.3x CPU on the production-resolution flythrough, CPU wins at 192×144
+
+**Context.** Kaarel's catch: the 07-17 space flythrough was assumed
+GPU-rendered; in fact keyframe_raymap → render_raymap = the *recursive*
+renderer, in *F64*, on *CPU* — the production video path had never used the
+wavefront driver, F32, or the card. flyvideo now takes `gpu=1` (under
+--project=gpu): frame raymaps run the wavefront driver with DeviceSweep
+(one device throat upload, reused across frames), F32 against F32-rounded
+tables, entry solves F64 against the F32-coefficient surface (the 14c
+seam). Deliberately CPU F64: coast (flight path bit-identical to CPU runs),
+flow probes, and refine! escalation — so escalated pixels land at F64.
+
+**The surprise (kaarel predicted one).** Frame 4 of the first GPU cube
+flight: KernelException. With -g2: InexactError at wedge_index —
+`Int(...)` of NaN — via christoffel ← geodesic_flow. An F32 ray blows up
+mid-step (filament class): vel goes non-finite, the NaN reaches a *stage
+position* within one RK4 step, and wedge_index throws. On device one
+throwing thread kills the whole launch. Reproduced identically on the
+**CPU F32 wavefront** (cube flight camera at τ=1.6): the certified F32
+path has carried this latent crash since it landed — 14c acceptance ran
+static cameras; a flight's worth of viewpoints reaches the measure-zero
+cases. Fix (control-flow only, never fires on finite rays — F64
+bit-identity with trace_geodesic untouched): wedge_index returns wedge 0
+on non-finite angle instead of throwing (any wedge is as good as any other
+for a ray that is already NaN), and sweep_ray retires non-finite phases as
+RAY_UNRESOLVED at the top of both loop branches — NaN rays die into the
+standing escalation machinery, which retraces them at F64. Certified: 451
+cold green; physics_diff worst deviations **exactly** unchanged
+(6.61e-15 / 1.61e-10); cube-flight frames GPU vs CPU differ on ~4–6% of
+pixels by ≤1 8-bit step (PAE 257/65535), eyeball-identical.
+
+**Numbers.** Cube flight 192×144 uniform=0.4 (16 frames, crossing
+included): GPU kernel total 14.6 s vs CPU total wall ~6 s — **CPU wins
+small flights** (small frames starve the card; crossing frames are
+straggler-latency-bound). Trefoil 768×576 uniform=0.02 from τ=6 (the
+lens-heavy approach), equal 420 s wall windows including startup: **GPU 86
+frames vs CPU 37** (~2.3x; the GPU window carries heavier startup — kernel
+compile — so the steady-state per-frame advantage is larger). ~4 s/frame
+GPU at production resolution vs the 07-17 render's 10.7 s/frame average.
+
+**Workload shift, confirmed.** The flythrough regime is not the static
+probe regime: mid-crossing frames put essentially all pixels in-throat
+(the static 768×576 camera enters only 15%), situated cameras start
+passage-0 legs in-throat, and escalation adds CPU F64 tail work per frame.
+Execution-engineering measurements from here on should benchmark against a
+flight segment, not the static camera. Per-frame device profiling of a
+real flight is the next instrument to build when needed.
+
 ## 2026-07-18 — execution engineering opens: the 19.2K local was ABI call-frame stack, not live state; @inline tree collapse buys 31% kernel / 15% CPU; occupancy is NOT the gate
 
 **Context.** Kaarel's call: set bundles/caches aside, see how far pure
