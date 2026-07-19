@@ -104,13 +104,13 @@ end
 
 # scalar chain rule (Faà di Bruno to order 3): outer 1D f given by its
 # derivatives f1..f3 at g.f, inner a (u,v) jet
-compose1(f0, f1, f2, g::Jet2) = Jet2(
+@inline compose1(f0, f1, f2, g::Jet2) = Jet2(
     f0, f1 * g.fu, f1 * g.fv,
     f2 * g.fu^2 + f1 * g.fuu,
     f2 * (g.fu * g.fv) + f1 * g.fuv,
     f2 * g.fv^2 + f1 * g.fvv)
 
-compose1(f0, f1, f2, f3, g::Jet3) = Jet3(
+@inline compose1(f0, f1, f2, f3, g::Jet3) = Jet3(
     f0, f1 * g.fu, f1 * g.fv,
     f2 * g.fu^2 + f1 * g.fuu,
     f2 * (g.fu * g.fv) + f1 * g.fuv,
@@ -244,37 +244,42 @@ its derivatives along (Aₖ₊₁ = Aₖ·x + c ⇒ A′ₖ₊₁ = A′ₖ·x +
 Returns three (f, fx, fy, fxx, fxy, fyy, fxxx, fxxy, fxyy, fyyy) tuples; the
 f lane is eval_packed's exact arithmetic.
 """
-@inline function eval_packed_partials(packed::AbstractArray{<:AbstractFloat, 3}, x, y)
-    ntuple(Val(3)) do component
-        z = zero(x) * zero(y)
-        m00 = z; m10 = z; m20 = z; m30 = z
-        m01 = z; m11 = z; m21 = z
-        m02 = z; m12 = z; m03 = z
-        for i in size(packed, 2):-1:1
-            r0 = z; r1 = z; r2 = z; r3 = z
-            for j in size(packed, 3):-1:1
-                r3 = r3 * y + 3 * r2
-                r2 = r2 * y + 2 * r1
-                r1 = r1 * y + r0
-                r0 = r0 * y + packed[component, i, j]
-            end
-            m30 = m30 * x + 3 * m20
-            m21 = m21 * x + 2 * m11
-            m20 = m20 * x + 2 * m10
-            m12 = m12 * x + m02
-            m11 = m11 * x + m01
-            m10 = m10 * x + m00
-            m03 = m03 * x + r3
-            m02 = m02 * x + r2
-            m01 = m01 * x + r1
-            m00 = m00 * x + r0
+@inline function eval_packed_partials_component(packed, component, x, y)
+    # own @inline function, not an ntuple do-block: the lowered closure is too
+    # big for the inliner's own judgment, and as an ABI call its 10-lane return
+    # round-trips through device local memory per corner (census 2026-07-19)
+    z = zero(x) * zero(y)
+    m00 = z; m10 = z; m20 = z; m30 = z
+    m01 = z; m11 = z; m21 = z
+    m02 = z; m12 = z; m03 = z
+    for i in size(packed, 2):-1:1
+        r0 = z; r1 = z; r2 = z; r3 = z
+        for j in size(packed, 3):-1:1
+            r3 = r3 * y + 3 * r2
+            r2 = r2 * y + 2 * r1
+            r1 = r1 * y + r0
+            r0 = r0 * y + packed[component, i, j]
         end
-        (m00, m10, m01, m20, m11, m02, m30, m21, m12, m03)
+        m30 = m30 * x + 3 * m20
+        m21 = m21 * x + 2 * m11
+        m20 = m20 * x + 2 * m10
+        m12 = m12 * x + m02
+        m11 = m11 * x + m01
+        m10 = m10 * x + m00
+        m03 = m03 * x + r3
+        m02 = m02 * x + r2
+        m01 = m01 * x + r1
+        m00 = m00 * x + r0
     end
+    (m00, m10, m01, m20, m11, m02, m30, m21, m12, m03)
+end
+
+@inline function eval_packed_partials(packed::AbstractArray{<:AbstractFloat, 3}, x, y)
+    ntuple(component -> eval_packed_partials_component(packed, component, x, y), Val(3))
 end
 
 # three scalar jets to one vector jet (surface components back into SVectors)
-vjet3(a::Jet3, b::Jet3, c::Jet3) = Jet3(
+@inline vjet3(a::Jet3, b::Jet3, c::Jet3) = Jet3(
     SVector(a.f, b.f, c.f), SVector(a.fu, b.fu, c.fu), SVector(a.fv, b.fv, c.fv),
     SVector(a.fuu, b.fuu, c.fuu), SVector(a.fuv, b.fuv, c.fuv), SVector(a.fvv, b.fvv, c.fvv),
     SVector(a.fuuu, b.fuuu, c.fuuu), SVector(a.fuuv, b.fuuv, c.fuuv),

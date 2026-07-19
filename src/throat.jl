@@ -26,19 +26,25 @@ function pack_polys(polys)
     packed
 end
 
+# the per-component body lives in its own @inline function rather than an
+# ntuple do-block: the closure a do-block lowers to is too big for Julia's
+# inliner to collapse on its own, and as an ABI call it round-trips every
+# corner evaluation through device local memory (census 2026-07-19)
+@inline function eval_packed_component(packed, component, u, v)
+    acc_u = zero(u) * zero(v)
+    for i in size(packed, 2):-1:1
+        acc_v = zero(acc_u)
+        for j in size(packed, 3):-1:1
+            acc_v = acc_v * v + packed[component, i, j]
+        end
+        acc_u = acc_u * u + acc_v
+    end
+    acc_u
+end
+
 @inline function eval_packed(packed::AbstractArray{<:AbstractFloat, 3}, uv) # Abstract so device-side array types (and Float32 tables) dispatch here too
     u, v = uv[1], uv[2]
-    SVector(ntuple(Val(3)) do component
-        acc_u = zero(u) * zero(v)
-        for i in size(packed, 2):-1:1
-            acc_v = zero(acc_u)
-            for j in size(packed, 3):-1:1
-                acc_v = acc_v * v + packed[component, i, j]
-            end
-            acc_u = acc_u * u + acc_v
-        end
-        acc_u
-    end)
+    SVector(ntuple(component -> eval_packed_component(packed, component, u, v), Val(3)))
 end
 
 struct ThroatParams

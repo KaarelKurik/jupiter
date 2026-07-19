@@ -4,6 +4,56 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-19b — the traffic census overturns the lever ranking: flow6's interior is ~90% of per-attempt local traffic, sweep_ray's 7.9K frame is footprint-not-traffic; leaf-inline completion buys 3.5% kernel / 3–5% CPU, bit-identical
+
+**Method.** Lever (a) opened with the promised census, byte-weighted this
+time: PTX dump of kernel_sweep (F32), awk over per-function `__local_depot`
+sizes and ld/st.local *bytes* (width-decoded), plus the call graph from
+`call.uni` targets. The 07-18 census ranked by static depot size; this one
+weights by dynamic execution (calls per attempt × bytes per body).
+
+**The correction.** Per dopri attempt, local traffic is: 7 × flow6 body
+(1752 ld + 2128 st B each) ≈ 27 KB, vs sweep_ray's own ≤ 1 KB, dopri_step
+336 B, settle ~200 B (chart_transition ~1 KB but only on hops). The two
+monster closures (`__56_*`, 2.5 KB/2 KB traffic each) are the ForwardDiff
+`situate` closures — exit-path only, per passage not per attempt.
+**sweep_ray's 7856 B depot is stack *footprint*, not traffic** — it gates
+streamed bytes/wave only, and occupancy was already ruled out as the
+binding constraint. So lever (a) as written (slim what crosses the
+dopri_step boundary) attacks 4% of the traffic; the gate is flow6's
+*interior* — the spilled working set of the collapsed jet tower.
+
+**What still crossed ABI inside flow6.** eval_packed_partials' ntuple
+do-block lowers to a closure too big for Julia's inliner despite the
+enclosing @inline (6 calls/body, 10-lane sret round-trips through local);
+same for eval_packed's; compose1 and vjet3 simply lacked annotations; plus
+a small [2×f32] sincos-class math leaf (left alone). Fix: per-component
+bodies extracted into named @inline functions (throat.jl, jets.jl),
+annotations added.
+
+**Result.** flow6 depot 1680 → 1360 B, body traffic 3880 → 3560 B (−8%);
+whole-kernel local 13,976 → 13,952 B/thread. Interleaved A/B (protocol per
+2026-07-19): kernel min 0.378/0.375 baseline vs 0.363/0.365 leaf-inlined —
+**−3.5% kernel**; CPU recursive −4–5% (1.95 → 1.87 at 768×576, 0.123 →
+0.116 at 192×144), wavefront F32 −3% at 192×144, neutral-noisy at 768.
+physics_diff deviations **exactly 0** against the morning's baselines (the
+extraction moved no arithmetic), 451 cold green, device parity counts
+character-identical to the pre-leaf run (F64 0 flips, 377268/442187
+bit-identical).
+
+**Why the win is 3.5% and not 8%.** The sret slots vanished but most of
+flow6's spill stayed: with registers capped at 255 the compiler spills
+whatever live state exceeds them, call structure or not. Local traffic
+tracks *live aggregate width*, not call count — which is exactly the case
+for kaarel's deep-fusion vision (plan item 3d): shrinking the jet tower's
+live lanes algebraically (directional jets, the Euler–Lagrange form) is
+the only remaining way to cut the dominant traffic. Ranking after this
+session: (d) deep fusion attacks the ~90% (throughput regime), (b) CPU
+tail handoff attacks the straggler tail (latency regime, 46% of kernel),
+(c) pool-init overlap attacks the wall-kernel gap; "slim sweep_ray's
+frame" is retired as a traffic lever (it remains relevant only if
+footprint ever binds).
+
 ## 2026-07-19 — Γ-contraction fusion lands: CPU 2–4%, device kernel NEUTRAL — post-collapse the kernel doesn't pay for FLOPs, and cross-session kernel numbers carry GPU clock state
 
 **Context.** The agreed opener (2026-07-18 doctrine discussion, first
