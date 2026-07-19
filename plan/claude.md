@@ -31,52 +31,35 @@ certified against it; the jet christoffel against its AD twin
 ulps). F32 is accepted end-to-end by kaarel's decomposition metric
 (measurements.md 2026-07-14c, re-confirmed post-jets 2026-07-16).
 
-Perf state (measurements.md 2026-07-16, updated 2026-07-18): the
-hand-rolled derivative lever paid out on both platforms — CPU christoffel
-12.3x, whole renders 11.5–12.5x, device kernel 21.5x F64 / 34x F32; device
-F32 2.1x ahead of 16-thread CPU at 768×576. The 2026-07-18 execution
-session added the @inline tree collapse (christoffel tree into flow6's
-frame): device F32 kernel 0.560 → 0.386 s at 768×576 (wall ~0.54), local
-19.2K → 14.0 KB/thread, CPU renders another ~15% (192×144 wavefront F32
-0.095 → 0.081). Standing diagnosis: the kernel is bandwidth-bound on its
-own ABI-stack local traffic, NOT occupancy-limited (register caps measured
-twice, always lose); kernel time is two regimes — a throughput-bound first
-round and latency-bound straggler tail rounds (46% of kernel for <1% of
-rays, the budget-capped filament pixels). The production Γ path is AD-free
-closed-form, which also settles shader portability. **2026-07-19: the
-Γ-contraction fusion landed** (geodesic hot path never materializes Γ;
-reference geodesic_accel carries the meaning): CPU another 2–4%, device
-kernel *neutral* — post-collapse Γ already lived inside flow6's frame, so
-removing FLOPs touches none of the local traffic the kernel is
-bandwidth-bound on. Confirmed corollary: on device, traffic levers come
-before FLOP levers. Benchmark protocol note: GPU kernel numbers do not
-reproduce across sessions (clock state); device A/B runs same-day,
-interleaved, ≥2 full-size warm passes, min-of-reps (measurements.md
-2026-07-19).
+Perf state (measurements.md 2026-07-16 → 2026-07-19b): hand-rolled jet
+christoffels are 12x CPU / 21–34x device over the AD path they replaced;
+the production Γ path is AD-free closed-form (settles shader portability);
+device F32 ~2x 16-thread CPU at 768×576 (kernel ~0.36 s, local 14.0
+KB/thread). Standing diagnosis: the kernel is bandwidth-bound on its own
+local-memory traffic, NOT occupancy-limited (register caps always lose);
+~90% of per-attempt local traffic is flow6's *interior* — the collapsed
+jet tower's live width exceeds the 255-register cap and spills; call
+structure is no longer a factor (07-18 @inline collapse + 07-19 leaf
+completion removed it), and FLOP cuts alone don't move the kernel
+(Γ-contraction fusion: CPU 2–4%, device neutral). Kernel time is two
+regimes: a throughput-bound first round and a latency-bound straggler tail
+(46% of kernel for <1% of rays, the budget-capped filament pixels).
+Device benchmark protocol: kernel numbers don't reproduce across sessions
+(clock state) — A/B same-day, interleaved, ≥2 full-size warm passes,
+min-of-reps; workload-sensitive levers benchmark against flight segments,
+not the static camera.
 
-Latest flight work (2026-07-17 video session): flyvideo.jl carries the full
-authoring surface — scene=/pacing knobs, sky1=/sky2= equirect paths,
-unresolved-pixel budget escalation (`unres=`/`esc=`: only side==0 pixels
-retraced under doubled budgets; measurements.md 2026-07-17), and
-`exit_placement()`, the first non-identity Placement in use (side-2
-embedding rotated so the outro flies at the destination sky's hero
-feature — kaarel's call: author the embedding frame, never the sky asset).
-**2026-07-18: flyvideo grew `gpu=1`** (run under --project=gpu): frame
-raymaps trace on the device in F32; coast/probes/escalation stay CPU F64,
-so the flight path is bit-identical to CPU runs and escalated pixels land
-at F64. Wiring it surfaced a latent F32 bug in the *CPU* wavefront too
-(NaN rays threw InexactError in wedge_index; on device one such ray killed
-the launch) — fixed by guards that retire non-finite rays as
-RAY_UNRESOLVED into the standing escalation machinery (measurements.md
-2026-07-18b). Note the 07-17 space flythrough ran recursive/F64/CPU — the
-production video path had never used the wavefront driver, F32, or the
-card until now.
-Real skies live as tracked JPGs in res/textures/ (skybox[12].jpg CC0
-nature panoramas; space[12].jpg from kaarel's manual_wormhole bg0/bg1
-cubemaps via scripts/cube2equirect.jl); frame PPMs land in out/frames/.
-Flagship render: gallery/trefoil_flythrough_space.mp4 (768×576, 701
-frames, 125.5 min, esc=4). The honest constant-speed cube video (uniform
-Δτ ≈ 0.0037, ~1670 frames) still just hasn't been wanted.
+Flight/video state: flyvideo.jl is the authoring surface — adaptive/uniform
+pacing, scene=/sky1=/sky2= knobs, unresolved-pixel budget escalation
+(`unres=`/`esc=`), `exit_placement()` (author the embedding frame, never
+the sky asset), and `gpu=1` (device F32 frame raymaps; coast/probes/
+escalation stay CPU F64, so flight paths are bit-identical to CPU runs and
+escalated pixels land F64; ~2.3x at 768×576, CPU wins small frames). Real
+skies: res/textures/ skybox[12].jpg + space[12].jpg (render-ready PPMs
+regenerated per checkout via magick — see flyvideo.jl header); frames land
+in out/frames/. Flagship: gallery/trefoil_flythrough_space.mp4 (768×576,
+701 frames). The honest constant-speed cube video (uniform Δτ ≈ 0.0037)
+still just hasn't been wanted.
 
 Gallery: first_light, textured trefoil, cube first flythrough, trefoil
 flythrough (nature skies low-res, and the space flythrough at 768×576).
@@ -97,14 +80,10 @@ perceptually honest — the filament is where the image already aliases.
 (The core is "irreducible" only up to Lyapunov-limited depth: the
 section-cache idea under item 2 attacks it directly.)
 
-**Reordered 2026-07-18 (kaarel's call): item 3 — GPU execution
-engineering — is active now**, invoking the reordering trigger below;
-bundles and caches are set aside to see how far execution alone goes.
-Scoring note (kaarel's correction, 2026-07-18): execution engineering
-helps *both* the realtime-authoring endpoint and offline renders — device
-F32 already beats 16-thread CPU at production resolutions, and offline
-video benefits as soon as flyvideo grows a GPU path (deferred item from
-2026-07-17).
+Item 3 runs ahead of 1–2 (kaarel's reordering, 2026-07-18): bundles and
+caches are set aside to see how far execution alone goes. Execution
+engineering helps *both* the realtime-authoring endpoint and offline
+renders (flyvideo gpu=1).
 
 1. **Jacobi-field ray bundles (DNGR-style).** Trace sparse rays +
    geodesic deviation κ; interpolate where the exit map is smooth,
@@ -167,76 +146,45 @@ video benefits as soon as flyvideo grows a GPU path (deferred item from
    fallback; valid only where the metric is d-free, which is exactly
    where the winding tail lives. Attacks the cost analysis's "irreducible
    core" directly — softens it to Lyapunov-limited depth.
-3. **GPU execution engineering — ACTIVE as of 2026-07-18** (was "last,
-   because it's mechanical, doesn't change images, and multiplies whatever
-   algorithm exists"; kaarel invoked the reordering to see how far
-   execution alone goes). Attack order for the phase (agreed 2026-07-18):
-   profile first (instrumented wall decomposition + per-round series +
-   ray-lifetime histogram at 768×576 F32, plus a maxregs × threads/block
-   launch-config sweep), then rank the levers with data. **Phase 1 done
-   (measurements.md 2026-07-18)**: the profiling landed and the first
-   lever paid — the 19.2K local/thread was ABI call-frame stack, the
-   @inline tree collapse into flow6 bought 31% kernel / 15% CPU, and
-   occupancy was ruled out as the gate (bandwidth on local traffic is;
-   register caps lose, measured twice; the blowup boundary is mapped —
-   inlining the structural layer OOMs at 127–188 KB/thread). **Γ-contraction
-   fusion done (2026-07-19, measurements.md entry)**: the first
-   go-wild-with-reference move (kaarel's doctrine call: production may fuse
-   into opaque blocks, reference.jl carries the meaning) — reference.jl
-   geodesic_accel + fused production twin, physics_diff re-baselined (the
-   anticipated moment). Outcome: CPU 2–4%, device kernel neutral (±1%) —
-   Γ was already frame-local post-collapse, so FLOP cuts don't touch the
-   gating local traffic; on device, traffic levers before FLOP levers, and
-   the fusion's FLOP savings get re-credited once the kernel stops being
-   traffic-bound. **2026-07-19b: the byte-weighted census re-ranked the
-   levers** — per-attempt local traffic is ~90% flow6 *interior* (the
-   collapsed jet tower's spilled working set, 7 dopri stages × ~3.6 KB);
-   sweep_ray's 7856 B depot is footprint, not traffic, and is retired as a
-   traffic lever. Leaf-inline completion (eval_packed[_partials]
-   do-closures → @inline per-component functions, compose1/vjet3
-   annotated) took the callable-ABI residue out: −3.5% kernel, −3–5% CPU,
-   bit-identical. What remains in flow6 spills because live width exceeds
-   255 registers — call structure is no longer the cause. Next, ranked:
-   (d-promoted) deep fusion below, the only lever that shrinks the
-   dominant traffic (kaarel to confirm timing — he flagged it "later down
-   the line"); (b) the
-   straggler tail — 46% of kernel serves <1% of rays at ~0.5 ms serial
-   latency per attempt: CPU tail handoff via the sweep_stage! seam (a
-   400-attempt straggler is ~1 ms serial on host vs ~200 ms on device),
-   budget-as-deadline for realtime, threads=128 as a free 6%; (c)
-   pool-init overlap — the wall-vs-kernel gap is the *initial* 442k F64
-   entry solves + device throat build (per-round entries are 0.5%; the
-   old ~20% attribution corrected), pipelinable against round 1, or an
-   F32/in-kernel entry solve (the F64 host solve was a 14c design
-   convenience, never a requirement — kaarel 2026-07-17); (d) **deep
-   fusion, kaarel's fuller reading of the opaque-block doctrine (recorded
-   2026-07-19, for later down the line)**: fuse chart logic + interpolation
-   + contraction into one block *algebraically*, not just at the inline
-   level. The math that makes it a real lever: with v constant during one
-   RHS evaluation the acceleration is the Euler–Lagrange form a =
-   g⁻¹(½∇(vᵀgv) − D_v(gv)) — everything needed is derivatives of
-   *contracted* objects (one scalar field's gradient, one vector field's
-   directional derivative), and with g = (∂c)ᵀ(∂c) these are vᵀgv =
-   |D_v c|², gv = (∂c)ᵀD_v c. So a directional-jet tower (lanes contracted
-   against v from eval_packed_partials up, instead of all 10 partials)
-   shrinks the live aggregate widths flowing through the whole block — and
-   live width is the local traffic the kernel is gated on — plus a real
-   FLOP cut on CPU. Cost: a second jet algebra beside Jet3 touching the
-   whole chain (packed eval → wedge/cpow → wirtinger → blend → metric);
-   production goes genuinely opaque (doctrine covers it; reference could
-   someday state the EL form as the meaning-carrier). **The 2026-07-19b
-   census answered the sequencing question: dominant traffic is NOT
-   structural — it is flow6-interior live width, exactly what (d)
-   shrinks. Promoted to the top device lever, pending kaarel's timing
-   call.** Frame batching
-   for offline video unchanged (latency-hostile in realtime). Persistent
-   threads demoted: the tail is latency-bound, not wave-quantized, so a
-   queue doesn't fix it. Benchmarks from here run against a flight
-   segment, not the static camera (2026-07-18b). Tools ask pending:
-   `pacman -S nsight-compute nsight-systems` (kaarel to install) — ncu
-   hardware counters + nsys timelines sharpen the next phase.
-   Reordering trigger (served 2026-07-18): this item now runs ahead of
-   1–2.
+3. **GPU execution engineering — ACTIVE.** Done so far (why-chains in
+   measurements.md 2026-07-18 → 2026-07-19b): wall decomposition, the
+   ABI-stack diagnosis and @inline tree collapse (−31% kernel / −15% CPU),
+   occupancy ruled out, Γ-contraction fusion (reference geodesic_accel
+   carries the meaning; physics_diff re-baselined), the byte-weighted
+   traffic census, leaf-inline completion (−3.5% kernel / −3–5% CPU,
+   bit-identical). Mapped constraints: structural-layer inlining OOMs at
+   127–188 KB/thread; sweep_ray's 7.9K depot is footprint-not-traffic
+   (retired as a lever); remaining flow6 spill is live-width-forced, so
+   only narrower objects — not call restructuring — cut the dominant
+   traffic. **Next moves agreed 2026-07-19: (b) first, then (d).**
+   - (b) **CPU tail handoff**: the straggler tail is 46% of kernel for
+     <1% of rays at ~0.5 ms serial latency per attempt. After round ~2,
+     ship the few hundred stragglers to host threads via the sweep_stage!
+     seam (backend-per-round is trivial there; a 400-attempt straggler is
+     ~1 ms serial on host vs ~200 ms on device). Budget-as-deadline stays
+     the realtime degradation semantics; threads=128 is a free ~6%
+     (candidate DeviceSweep default).
+   - (d) **Deep fusion** (kaarel's fuller reading of the opaque-block
+     doctrine, promoted by the census): fuse chart logic + interpolation
+     + contraction *algebraically*. With v constant per RHS evaluation,
+     the acceleration is the Euler–Lagrange form a = g⁻¹(½∇(vᵀgv) −
+     D_v(gv)) — all derivatives of contracted objects (with g = (∂c)ᵀ(∂c):
+     vᵀgv = |D_v c|², gv = (∂c)ᵀD_v c) — so a directional-jet tower
+     (v-contracted lanes from eval_packed_partials up, instead of all 10
+     partials) shrinks exactly the live width that is the dominant local
+     traffic, plus a real CPU FLOP cut. Cost: a second jet algebra beside
+     Jet3 through the whole chain (packed eval → wedge/cpow → wirtinger →
+     blend → metric); production goes genuinely opaque (doctrine covers
+     it; reference states the EL form as the meaning-carrier).
+   - (c) behind those: **pool-init overlap** — the wall-kernel gap is the
+     initial 442k F64 entry solves + device throat build, pipelinable
+     against round 1 (or an in-kernel entry solve; the F64 host solve was
+     a design convenience, never a requirement).
+   Frame batching for offline video unchanged (latency-hostile in
+   realtime); persistent threads demoted (the tail is latency-bound, not
+   wave-quantized). Tools ask pending: `pacman -S nsight-compute
+   nsight-systems` (kaarel to install) — ncu counters and nsys timelines
+   sharpen (b) and (c).
 
 Unordered, as wanted:
 
@@ -402,9 +350,6 @@ belong here:
 - The 14-check AD battery lived in a session scratchpad (2026-07-08) and is
   likely gone; if promoting it to test/ ever matters, reconstruct from the
   description in plan/2026-07-08.md rather than hunting for the file.
-- physics_diff deviations are nonzero (≤1.26e-10) though passing; if a
-  future optimization stacks more reordering on top, re-baselining then is
-  the natural moment (2026-07-16 session note).
 
 ## Working conventions
 
