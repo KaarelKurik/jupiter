@@ -4,7 +4,7 @@ Companion to kaarel's journal (`plan/kaarel.md`); holds current state, the
 open decisions, and standing conventions. Dated session records live
 alongside as `plan/YYYY-MM-DD.md`; findings with their why-chains live in
 repo-root `measurements.md`; the code map is repo-root `atlas.md`. Last
-updated 2026-07-17. **This file is the resume point** — read it plus `jj log`
+updated 2026-07-18. **This file is the resume point** — read it plus `jj log`
 before touching code. This file describes the present; the history of how we
 got here lives in the session logs and jj descriptions, not here.
 
@@ -169,20 +169,32 @@ video benefits as soon as flyvideo grows a GPU path (deferred item from
    @inline tree collapse into flow6 bought 31% kernel / 15% CPU, and
    occupancy was ruled out as the gate (bandwidth on local traffic is;
    register caps lose, measured twice; the blowup boundary is mapped —
-   inlining the structural layer OOMs at 127–188 KB/thread). Ranked next
-   targets: (a) sweep_ray's own 7.9K frame, the biggest remaining, its
-   traffic per attempt iteration; (b) the straggler tail — 46% of kernel
-   serves <1% of rays at ~0.5 ms serial latency per attempt: CPU tail
-   handoff via the sweep_stage! seam (a 400-attempt straggler is ~1 ms
-   serial on host vs ~200 ms on device), budget-as-deadline for realtime,
-   threads=128 as a free 6%; (c) pool-init overlap — the wall-vs-kernel
-   gap is the *initial* 442k F64 entry solves + device throat build
-   (per-round entries are 0.5%; the old ~20% attribution corrected),
-   pipelinable against round 1, or an F32/in-kernel entry solve (the F64
-   host solve was a 14c design convenience, never a requirement — kaarel
-   2026-07-17). Frame batching for offline video unchanged
-   (latency-hostile in realtime). Persistent threads demoted: the tail is
-   latency-bound, not wave-quantized, so a queue doesn't fix it.
+   inlining the structural layer OOMs at 127–188 KB/thread). **Next
+   session opens with the Γ-contraction fusion (agreed 2026-07-18, the
+   first go-wild-with-reference move — kaarel's doctrine call: production
+   may fuse into opaque blocks, reference.jl carries the meaning): never
+   materialize the 27-component Γ; w_u = v^i v^j (∂_i g_{uj} − ½ ∂_u
+   g_{ij}), a = −g⁻¹w, specialized to hot-path w ≡ v (general transport
+   stays for camera frames); real FLOP reduction; reference.jl first,
+   production follows, re-baseline physics_diff (the deviations already
+   moved in-band 2026-07-18 — this is the anticipated re-baseline
+   moment).** Behind it, ranked: (a) sweep_ray's own 7.9K frame, the
+   biggest remaining, its traffic per attempt iteration; (b) the
+   straggler tail — 46% of kernel serves <1% of rays at ~0.5 ms serial
+   latency per attempt: CPU tail handoff via the sweep_stage! seam (a
+   400-attempt straggler is ~1 ms serial on host vs ~200 ms on device),
+   budget-as-deadline for realtime, threads=128 as a free 6%; (c)
+   pool-init overlap — the wall-vs-kernel gap is the *initial* 442k F64
+   entry solves + device throat build (per-round entries are 0.5%; the
+   old ~20% attribution corrected), pipelinable against round 1, or an
+   F32/in-kernel entry solve (the F64 host solve was a 14c design
+   convenience, never a requirement — kaarel 2026-07-17). Frame batching
+   for offline video unchanged (latency-hostile in realtime). Persistent
+   threads demoted: the tail is latency-bound, not wave-quantized, so a
+   queue doesn't fix it. Benchmarks from here run against a flight
+   segment, not the static camera (2026-07-18b). Tools ask pending:
+   `pacman -S nsight-compute nsight-systems` (kaarel to install) — ncu
+   hardware counters + nsys timelines sharpen the next phase.
    Reordering trigger (served 2026-07-18): this item now runs ahead of
    1–2.
 
