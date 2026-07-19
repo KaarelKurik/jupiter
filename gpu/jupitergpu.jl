@@ -66,16 +66,30 @@ sweep stage for run_wavefront! that launches the active records through
 kernel_sweep on a device throat (build it with the same T as the pool, or
 mixed-precision promotion silently puts F64 math on the card). Gather →
 launch → scatter; kernel wall time accumulates in `kernel_seconds`.
+
+`handoff`: rounds with at most this many active records run on host threads
+instead, to completion (sweep = the full step budget) — the straggler tail
+is latency-bound on the device (a near-constant ~33 ms per round however few
+rays remain), while a few hundred budget-capped rays are milliseconds on
+host threads. The handed-off rays go through the same sweep_ray the kernel
+runs, on the host tables of the same values, so they land in the standing
+CPU-vs-device intrinsic-ulps band; host time is not counted in
+`kernel_seconds`.
 """
 struct DeviceSweep{DT}
     dthroat::DT
     threads::Int
+    handoff::Int
     kernel_seconds::Base.RefValue{Float64}
 end
 
-DeviceSweep(dthroat; threads = 256) = DeviceSweep(dthroat, threads, Ref(0.0))
+DeviceSweep(dthroat; threads = 128, handoff = 1024) = DeviceSweep(dthroat, threads, handoff, Ref(0.0))
 
 function (ds::DeviceSweep)(pool::Vector{J.WavefrontRay{T}}, active, env, throat, budget, sweep) where {T}
+    if length(active) <= ds.handoff
+        J.threaded_sweep!(pool, active, env, throat, budget, budget.max_steps)
+        return nothing
+    end
     recs = pool[active]
     drecs = CuArray(recs)
     t = CUDA.@elapsed @cuda threads = ds.threads blocks = cld(length(recs), ds.threads) kernel_sweep(
@@ -93,8 +107,8 @@ device throat, runs the host driver around kernel launches, returns
 the whole point on a warp machine.
 """
 function device_raymap(env, scene, budget, camera, cam_side, width, height;
-                       T = Float32, sweep = 64, bin = true, threads = 256)
-    ds = DeviceSweep(device_throat(scene.throat, T); threads)
+                       T = Float32, sweep = 64, bin = true, threads = 128, handoff = 1024)
+    ds = DeviceSweep(device_throat(scene.throat, T); threads, handoff)
     rm = J.wavefront_raymap(env, scene, budget, camera, cam_side, width, height;
                             T, sweep, bin, sweep_stage! = ds)
     (rm, ds.kernel_seconds[])
