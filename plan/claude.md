@@ -31,30 +31,41 @@ certified against it; the jet christoffel against its AD twin
 ulps). F32 is accepted end-to-end by kaarel's decomposition metric
 (measurements.md 2026-07-14c, re-confirmed post-jets 2026-07-16).
 
-Perf state (measurements.md 2026-07-16 → 2026-07-19b): hand-rolled jet
+Perf state (measurements.md 2026-07-16 → 2026-07-19c): hand-rolled jet
 christoffels are 12x CPU / 21–34x device over the AD path they replaced;
-the production Γ path is AD-free closed-form (settles shader portability);
-device F32 ~2x 16-thread CPU at 768×576 (kernel ~0.36 s, local 14.0
-KB/thread). Standing diagnosis: the kernel is bandwidth-bound on its own
-local-memory traffic, NOT occupancy-limited (register caps always lose);
-~90% of per-attempt local traffic is flow6's *interior* — the collapsed
-jet tower's live width exceeds the 255-register cap and spills; call
-structure is no longer a factor (07-18 @inline collapse + 07-19 leaf
-completion removed it), and FLOP cuts alone don't move the kernel
-(Γ-contraction fusion: CPU 2–4%, device neutral). Kernel time is two
-regimes: a throughput-bound first round and a latency-bound straggler tail
-(46% of kernel for <1% of rays, the budget-capped filament pixels).
-Device benchmark protocol: kernel numbers don't reproduce across sessions
-(clock state) — A/B same-day, interleaved, ≥2 full-size warm passes,
-min-of-reps; workload-sensitive levers benchmark against flight segments,
-not the static camera.
+the production Γ path is AD-free closed-form (settles shader portability).
+**Production integrates with fixed-step RK4**: every production RayBudget
+is the 3-arg constructor (tolerance = 0), so the dopri/error-control
+branch executes only in tests — discovered 2026-07-19c; it inverts item
+3(e)'s framing and corrects the 19b census (per-attempt traffic is 4 RK4
+stages of the same jet tower, not 7 dopri stages; the shared-tower
+conclusions and all landed wins survive). Device F32 at 768×576: wall
+0.40 s = kernel 0.21 s + host straggler tail + ~0.19 s pool-init gap
+(lever c, now the probe workload's biggest single item); local 14.1
+KB/thread. The straggler tail (a ~33 ms/round latency floor, 37% of
+kernel for <1% of rays) is handed to host threads since 2026-07-19c
+(DeviceSweep defaults handoff=1024, threads=128), which also flips the
+small-frame conclusion: device F32 beats CPU at 192×144 (0.051 vs 0.078
+wall, raymap level). Standing diagnosis: the kernel is bandwidth-bound on
+its own local-memory traffic, NOT occupancy-limited (register caps always
+lose); ~90% of per-attempt local traffic is the stage tower's interior —
+live width exceeds the 255-register cap and spills; call structure is no
+longer a factor, and FLOP cuts alone don't move the kernel. Device
+benchmark protocol: kernel numbers don't reproduce across sessions (clock
+state) — A/B same-day, interleaved, ≥2 full-size warm passes, min-of-reps;
+wall is the honest metric (host tail time is deliberately outside
+kernel_seconds); workload-sensitive levers benchmark against flight
+segments, not just the static camera (the mid-crossing regime is a single
+all-throat round — no tail, latency levers are no-ops there).
 
 Flight/video state: flyvideo.jl is the authoring surface — adaptive/uniform
 pacing, scene=/sky1=/sky2= knobs, unresolved-pixel budget escalation
 (`unres=`/`esc=`), `exit_placement()` (author the embedding frame, never
 the sky asset), and `gpu=1` (device F32 frame raymaps; coast/probes/
 escalation stay CPU F64, so flight paths are bit-identical to CPU runs and
-escalated pixels land F64; ~2.3x at 768×576, CPU wins small frames). Real
+escalated pixels land F64; ~2.3x at 768×576, and since the 2026-07-19c tail
+handoff the device also wins small frames at the raymap level — 0.051 vs
+0.078 wall at 192×144; flyvideo-level confirmation rides the next render). Real
 skies: res/textures/ skybox[12].jpg + space[12].jpg (render-ready PPMs
 regenerated per checkout via magick — see flyvideo.jl header); frames land
 in out/frames/. Flagship: gallery/trefoil_flythrough_space.mp4 (768×576,
@@ -147,23 +158,22 @@ renders (flyvideo gpu=1).
    where the winding tail lives. Attacks the cost analysis's "irreducible
    core" directly — softens it to Lyapunov-limited depth.
 3. **GPU execution engineering — ACTIVE.** Done so far (why-chains in
-   measurements.md 2026-07-18 → 2026-07-19b): wall decomposition, the
+   measurements.md 2026-07-18 → 2026-07-19c): wall decomposition, the
    ABI-stack diagnosis and @inline tree collapse (−31% kernel / −15% CPU),
    occupancy ruled out, Γ-contraction fusion (reference geodesic_accel
    carries the meaning; physics_diff re-baselined), the byte-weighted
    traffic census, leaf-inline completion (−3.5% kernel / −3–5% CPU,
-   bit-identical). Mapped constraints: structural-layer inlining OOMs at
-   127–188 KB/thread; sweep_ray's 7.9K depot is footprint-not-traffic
-   (retired as a lever); remaining flow6 spill is live-width-forced, so
-   only narrower objects — not call restructuring — cut the dominant
-   traffic. **Next moves agreed 2026-07-19: (b) first, then (d).**
-   - (b) **CPU tail handoff**: the straggler tail is 46% of kernel for
-     <1% of rays at ~0.5 ms serial latency per attempt. After round ~2,
-     ship the few hundred stragglers to host threads via the sweep_stage!
-     seam (backend-per-round is trivial there; a 400-attempt straggler is
-     ~1 ms serial on host vs ~200 ms on device). Budget-as-deadline stays
-     the realtime degradation semantics; threads=128 is a free ~6%
-     (candidate DeviceSweep default).
+   bit-identical), the CPU tail handoff (item b, served 2026-07-19c:
+   static-probe wall −20%, small frames flip to device, mid-crossing
+   correctly neutral; DeviceSweep defaults handoff=1024/threads=128), and
+   the fixed-RK4 discovery (production never runs dopri — see perf state).
+   Mapped constraints: structural-layer inlining OOMs at 127–188
+   KB/thread; sweep_ray's 7.9K depot is footprint-not-traffic (retired);
+   remaining stage-tower spill is live-width-forced, so only narrower
+   objects — not call restructuring — cut the dominant traffic. **Next:
+   (d) deep fusion (agreed 2026-07-19), with (c) promoted by the handoff
+   to the probe workload's biggest single item — sequencing is kaarel's
+   call.**
    - (d) **Deep fusion** (kaarel's fuller reading of the opaque-block
      doctrine, promoted by the census): fuse chart logic + interpolation
      + contraction *algebraically*. With v constant per RHS evaluation,
@@ -172,45 +182,37 @@ renders (flyvideo gpu=1).
      vᵀgv = |D_v c|², gv = (∂c)ᵀD_v c) — so a directional-jet tower
      (v-contracted lanes from eval_packed_partials up, instead of all 10
      partials) shrinks exactly the live width that is the dominant local
-     traffic, plus a real CPU FLOP cut. Cost: a second jet algebra beside
-     Jet3 through the whole chain (packed eval → wedge/cpow → wirtinger →
-     blend → metric); production goes genuinely opaque (doctrine covers
-     it; reference states the EL form as the meaning-carrier).
-   - (c) behind those: **pool-init overlap** — the wall-kernel gap is the
+     traffic, plus a real CPU FLOP cut. Targets the RK4 stage tower (the
+     executing branch — 4 stages/attempt). Cost: a second jet algebra
+     beside Jet3 through the whole chain (packed eval → wedge/cpow →
+     wirtinger → blend → metric); production goes genuinely opaque
+     (doctrine covers it; reference states the EL form as the
+     meaning-carrier).
+   - (c) **pool-init overlap** — the wall-kernel gap (~0.19 s at 768×576,
+     now the probe workload's biggest single item post-handoff) is the
      initial 442k F64 entry solves + device throat build, pipelinable
      against round 1 (or an in-kernel entry solve; the F64 host solve was
-     a design convenience, never a requirement).
-   - (e) **Integrator economy (kaarel's question, 2026-07-19, assessed
-     end-of-session; not yet scheduled)**: a cheaper integrator moves the
-     accuracy/speed tradeoff — possibly acceptably, because (i) at F32 the
-     14c data reads as roundoff-dominated ("just rounding"), so DP5(4)'s
-     order may be buying truncation accuracy below the noise floor; (ii)
-     each step is already capped at chart scale (h ≤ 0.25/|v|) — wherever
-     the cap, not the error controller, binds, 7 stages of order-5 are
-     wasted; (iii) the straggler tail is Lyapunov-dead pointwise (accuracy
-     there is statistical by the standing acceptance doctrine), and
-     cheaper attempts stretch the tail's budget-as-effort semantics.
-     Gate on three cheap probes before any commitment: the h-cap-binding
-     fraction; the Richardson h/tol-refinement probe (also closes the
-     standing no-converged-ground-truth open item — it is the instrument
-     that says how much accuracy slack exists); and the zero-code
-     experiment — the tolerance=0 fixed-RK4 branch already in sweep_ray
-     vs dopri, judged by the decomposition metric + eyeballed renders.
-     Candidates if it pays: Bogacki–Shampine 3(2) (keeps error control),
-     fixed RK4, or per-regime mixing (DP5 bulk, cheap tail — composes
-     with (b), precedent in the escalation machinery). A full switch is a
-     deliberate physics change: reference first, re-baseline, re-accept.
-     **Free and bit-identical regardless (fold into the (b) session):
-     dopri k1 reuse** — k1 = f(u) is h-independent, so every rejected
-     attempt recomputes an identical k1, and on accepted no-hop steps
-     (settle_phase returns the phase unchanged) k7 = f(u5) IS the next
-     k1 (FSAL); caching within the sweep loop needs no record change and
-     saves up to ~1/7 of flow6 evaluations.
+     a design convenience, never a requirement). nsys timelines are the
+     instrument.
+   - (e) **Integrator economy — reframed 2026-07-19c**: production is
+     *already* the cheap fixed-step RK4 integrator (h = 0.05 constant, no
+     h cap, no error controller — those live in the test-only dopri
+     branch). The morning's slack analysis (h-cap binding, wasted order-5
+     stages) described the non-executing branch and is void. The live
+     question inverts: would dopri-with-tolerance buy *accuracy* worth
+     its cost anywhere (chaotic band? tightened budgets?), or is fixed
+     RK4 at chart-scale h simply correct here? The Richardson
+     h-refinement probe — still the instrument that closes the standing
+     no-converged-ground-truth open item — now judges both at once:
+     quantify fixed-RK4's discretization error at production h, and
+     dopri's marginal value over it, by the decomposition metric. The
+     dopri arm is fair now: k1 reuse (reject cache + FSAL, 2026-07-19c)
+     is in both twin loops, bit-identical, footprint-only cost.
    Frame batching for offline video unchanged (latency-hostile in
-   realtime); persistent threads demoted (the tail is latency-bound, not
-   wave-quantized). Tools: nsight-compute + nsight-systems installed
-   (2026-07-19) — ncu stall-reason counters to confirm the local-latency
-   story directly, nsys timelines for (c) pool-init overlap.
+   realtime); persistent threads demoted (the tail is latency-bound and
+   now handled at the seam). Tools: nsight-compute + nsight-systems
+   installed (2026-07-19) — ncu stall-reason counters to confirm the
+   local-latency story directly, nsys timelines for (c).
 
 Unordered, as wanted:
 

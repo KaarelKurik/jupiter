@@ -4,6 +4,74 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-19c — production has always run fixed-RK4 (dopri is test-only); the tail handoff lands: static-probe wall −20%, small frames flip to the device; k1 reuse is free but optimizes a dead branch
+
+**The discovery.** The k1-reuse rider went in first (dopri_step gains a k1
+argument and returns the FSAL k7; both twin loops carry k1 across rejects
+and reuse k7 on no-hop accepts, the no-hop test being componentwise scalar
+egal — whole-struct `===` lowers to a memcmp runtime call the device
+compiler rejects, today's portability lesson). Certified bit-identical:
+451 cold green, physics_diff exactly 0/0, parity counts in character. Then
+every A/B read dead neutral — device 0.366/0.375/0.368/0.366, CPU
+recursive 0.1177/0.1175/0.1174 — and the why is the finding: **every
+production RayBudget is the 3-arg constructor, tolerance = 0.0, so
+trace_ray and sweep_ray take the fixed-step RK4 branch everywhere;
+dopri executes only in tests** (the 1e-8 cases). Corrections that follow:
+- The 19b census's "7 × flow6 per dopri attempt" counted the dopri call
+  graph; the executing loop is geodesic_step's 4 RK4 stages. The
+  *conclusions* survive — both branches walk the same jet-tower working
+  set, which is why the @inline collapse, Γ-fusion, and leaf-inline wins
+  were real — but per-attempt arithmetic based on 7 stages should read 4.
+- Item 3(e) inverts: the "cheaper integrator" is the status quo, dopri-
+  with-tolerance is the untaken *expensive* path, and the h-cap/error-
+  controller slack analysis described a branch production never enters.
+  The live (e) question is now whether error control would buy accuracy
+  worth its cost — the Richardson probe (still the ground-truth item's
+  instrument) judges it.
+- k1 reuse kept: +104 B/thread of *footprint* (occupancy doesn't bind),
+  zero runtime cost, and it makes the dopri arm fair when (e) runs it as
+  the accuracy reference.
+
+**The round census** (768×576 static probe, F32, sweep=64, logging
+sweep_stage! wrapper): rounds go 65114 → 3649 → 616 → 449 → 308 → 239 →
+186 active; kernel 0.198 / 0.033 / 0.033 / 0.033 / 0.033 / 0.033 / 0.008 s.
+Round 1 is 54% of kernel for 98% of the work; **rounds 3–7 are 37% for
+≤616 rays — a ~33 ms latency floor per round that doesn't care how few
+rays remain**. This is the 07-18 "46% tail" localized per-round, and it
+prices the handoff exactly: a few hundred budget-capped rays are
+milliseconds on 16 host threads.
+
+**The handoff** (plan item 3b, agreed 2026-07-19 morning): DeviceSweep
+gains `handoff` — a round with ≤ handoff active records runs
+threaded_sweep! to completion (sweep = budget.max_steps) instead of
+launching the kernel. Records already live in the host pool: pure control
+flow at the sweep_stage! seam, no record change, flyvideo gpu=1 inherits
+through the constructor defaults. Correctness: with handoff > pool size
+every round runs on host and the raymap is **bit-identical to the CPU
+wavefront (diff 0, F64 and F32)** — the "sweep granularity is
+scheduling-only" claim survives run-to-completion sweeps; with the default
+threshold, hybrid-vs-pure moves 219/27648 pixels (0.8%, the straggler
+class), gpu_tracer parity stays 0 flips with quantiles in the 14c band,
+and 384×288 shaded renders are eyeball-identical (855/110592 moved).
+
+**Numbers** (same-day interleaved, min-of-reps; wall is the honest metric
+now — host tail time is deliberately outside kernel_seconds):
+- static probe 768×576 F32: wall 0.500 → 0.401 (**−20%**, threads=128 +
+  handoff=1024), kernel 0.368 → 0.212. handoff=4096 within noise of 1024;
+  threads=128 alone −7% kernel.
+- mid-crossing frame (cube flight coasted to d=0.38, SituatedCamera):
+  **neutral, correctly** — the census there is a single 442k-ray round;
+  no tail exists, the handoff never fires. The lever is regime-matched:
+  it pays on approach/ambient frames, vanishes at crossing.
+- 192×144: device F32 wall 0.18 → **0.051, now beating CPU F32 (0.078)**
+  — the per-round latency floor was exactly what starved small frames.
+  07-18b's "CPU wins small frames" flips at the raymap level (flyvideo-
+  level confirmation rides the next real render).
+- remaining static-probe wall is ~0.19 s of wall–kernel gap (initial-pool
+  entry solves + upload): lever (c) is now the biggest single item on the
+  probe workload, ahead of deep fusion's share of the remaining 0.21 s
+  kernel.
+
 ## 2026-07-19b — the traffic census overturns the lever ranking: flow6's interior is ~90% of per-attempt local traffic, sweep_ray's 7.9K frame is footprint-not-traffic; leaf-inline completion buys 3.5% kernel / 3–5% CPU, bit-identical
 
 **Method.** Lever (a) opened with the promised census, byte-weighted this
