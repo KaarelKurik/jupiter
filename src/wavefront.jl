@@ -65,16 +65,29 @@ function sweep_ray(env, throat, budget, r::WavefrontRay{T}, sweep) where {T}
     finite(p) = isfinite(sum(p.pos) + sum(p.vel))
     if budget.tolerance > 0
         tol = T(budget.tolerance)
+        u = vcat(SVector{3}(v.pos), SVector{3}(v.vel))
+        k1 = zero(u)
+        fresh = true # k1 needs computing; deferred past the finite guard
         for _ in 1:sweep
             finite(v) || return throat_state(RAY_UNRESOLVED, v, r.passages, steps, h)
+            if fresh
+                k1 = flow6(env, v.chart, u)
+                fresh = false
+            end
             h = min(h, T(0.25) / (maximum(abs, v.vel) + T(1e-12)))
-            u = vcat(SVector{3}(v.pos), SVector{3}(v.vel))
-            u5, err = dopri_step(env, v.chart, u, h)
+            u5, err, k7 = dopri_step(env, v.chart, u, h, k1)
             scale = tol * (1 + maximum(abs, u))
             if err <= scale
-                v = settle_phase(env, SituatedPhase(v.chart, SVector(u5[1], u5[2], u5[3]),
-                                                    SVector(u5[4], u5[5], u5[6])))
+                vc = SituatedPhase(v.chart, SVector(u5[1], u5[2], u5[3]),
+                                   SVector(u5[4], u5[5], u5[6]))
+                v = settle_phase(env, vc)
                 exits_mouth(v) && return ambient_state(to_ambient(env, v), r.passages, h)
+                if same_phase(v, vc) # no hop: u5 is the next u exactly, so the FSAL stage is its k1
+                    u, k1 = u5, k7
+                else
+                    u = vcat(SVector{3}(v.pos), SVector{3}(v.vel))
+                    fresh = true
+                end
             end
             h = h * clamp(T(0.9) * (scale / (err + floatmin(T)))^T(1/5), T(0.2), T(5.0))
             steps += Int32(1)

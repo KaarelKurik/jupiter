@@ -233,13 +233,15 @@ function flow6(env, chart, u) # phase packed as [pos; vel]
 end
 
 """
-one Dormand–Prince 5(4) attempt in a fixed chart: the 5th-order state and the
-embedded 4th-order error estimate (sup norm)
+one Dormand–Prince 5(4) attempt in a fixed chart: the 5th-order state, the
+embedded 4th-order error estimate (sup norm), and the FSAL stage k7 = f(u5).
+k1 = f(u) is h-independent, so the caller carries it across attempts: a
+rejected attempt reuses it as-is, and when an accepted phase settles without
+a chart hop the returned k7 is the next attempt's k1 (u5 becomes u exactly).
 """
-function dopri_step(env, chart, u, h)
+function dopri_step(env, chart, u, h, k1)
     f(x) = flow6(env, chart, x)
     c = carrier(u[1]) # tableau ratios computed in Float64, one rounding into the carrier
-    k1 = f(u)
     k2 = f(u + h * c(1/5)*k1)
     k3 = f(u + h * (c(3/40)*k1 + c(9/40)*k2))
     k4 = f(u + h * (c(44/45)*k1 - c(56/15)*k2 + c(32/9)*k3))
@@ -248,8 +250,19 @@ function dopri_step(env, chart, u, h)
     u5 = u + h * (c(35/384)*k1 + c(500/1113)*k3 + c(125/192)*k4 - c(2187/6784)*k5 + c(11/84)*k6)
     k7 = f(u5)
     err = h * (c(71/57600)*k1 - c(71/16695)*k3 + c(71/1920)*k4 - c(17253/339200)*k5 + c(22/525)*k6 - c(1/40)*k7)
-    (u5, maximum(abs, err))
+    (u5, maximum(abs, err), k7)
 end
+
+dopri_step(env, chart, u, h) = dopri_step(env, chart, u, h, flow6(env, chart, u))
+
+# exact no-hop test for the k1 reuse: same chart handle and bitwise-equal
+# coordinates mean flow6 at b is bit-identical to flow6 at a. Scalar egal per
+# component — whole-struct === lowers to a memcmp runtime call device code
+# can't make.
+same_phase(a::SituatedPhase, b::SituatedPhase) =
+    half_edge_handle(a.chart).id == half_edge_handle(b.chart).id &&
+    side(half_throat(a.chart)) == side(half_throat(b.chart)) &&
+    all(map(===, a.pos, b.pos)) && all(map(===, a.vel, b.vel))
 
 """
 error-controlled trace. h0 seeds the controller; each step is additionally
@@ -261,14 +274,22 @@ function trace_geodesic(env, v::SituatedPhase, h0, max_attempts, tol)
     C = carrier(v.pos[1])
     h = C(h0)
     tol = C(tol)
+    u = vcat(SVector{3}(v.pos), SVector{3}(v.vel))
+    k1 = flow6(env, v.chart, u)
     for _ in 1:max_attempts
         h = min(h, C(0.25) / (maximum(abs, v.vel) + C(1e-12)))
-        u = vcat(SVector{3}(v.pos), SVector{3}(v.vel))
-        u5, err = dopri_step(env, v.chart, u, h)
+        u5, err, k7 = dopri_step(env, v.chart, u, h, k1)
         scale = tol * (1 + maximum(abs, u))
         if err <= scale
-            v = settle_phase(env, SituatedPhase(v.chart, SVector(u5[1], u5[2], u5[3]), SVector(u5[4], u5[5], u5[6])))
+            vc = SituatedPhase(v.chart, SVector(u5[1], u5[2], u5[3]), SVector(u5[4], u5[5], u5[6]))
+            v = settle_phase(env, vc)
             exits_mouth(v) && return to_ambient(env, v)
+            if same_phase(v, vc) # no hop: u5 is the next u exactly, so the FSAL stage is its k1
+                u, k1 = u5, k7
+            else
+                u = vcat(SVector{3}(v.pos), SVector{3}(v.vel))
+                k1 = flow6(env, v.chart, u)
+            end
         end
         h = h * clamp(C(0.9) * (scale / (err + floatmin(C)))^C(1/5), C(0.2), C(5.0))
     end
