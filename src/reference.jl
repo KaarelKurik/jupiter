@@ -110,8 +110,26 @@ function wvel_along_v(env, v::SituatedPhase, w::SituatedPhase)
     [-sum(v.vel[i] * w.vel[j] * c[k, i, j] for i in 1:3, j in 1:3) for k in 1:3]
 end
 
+"""
+geodesic acceleration a^k = −Γ^k_ij v^i v^j without materializing Γ: contracted
+against the symmetric v^i v^j, the two symmetric-derivative terms of Γ are the
+same number, so the whole contraction collapses to
+
+    w_u = v^i v^j (∂_i g_uj − ½ ∂_u g_ij),    a = −g⁻¹ w
+
+Equal to wvel_along_v(env, v, v), which stays as the general transport law
+(w ≢ v does not symmetrize). Production fuses this form (geodesic.jl).
+"""
+function geodesic_accel(env, v::SituatedPhase)
+    mf = p -> metric(env, v.chart, p)
+    dg = [directional(mf, v.pos, [Float64(i == j) for i in 1:3]) for j in 1:3]
+    w = [sum(v.vel[i] * v.vel[j] * (dg[i][u, j] - 0.5 * dg[u][i, j]) for i in 1:3, j in 1:3)
+         for u in 1:3]
+    -(mf(v.pos) \ w)
+end
+
 function geodesic_flow(env, v::SituatedPhase)
-    (v.vel, wvel_along_v(env, v, v))
+    (v.vel, geodesic_accel(env, v))
 end
 
 function geodesic_step(env, v::SituatedPhase, h) # one RK4 step, staying in v's chart
@@ -193,7 +211,7 @@ end
 
 function flow6(env, chart, u) # phase packed as [pos; vel]
     ph = SituatedPhase(chart, u[1:3], u[4:6])
-    [u[4:6]; wvel_along_v(env, ph, ph)]
+    [u[4:6]; geodesic_accel(env, ph)]
 end
 
 """

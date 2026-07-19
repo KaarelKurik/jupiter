@@ -120,7 +120,7 @@ end
     end)
 end
 
-@inline function christoffel(env, v::SituatedPhase)
+@inline function metric_gradient(env, v::SituatedPhase) # (g, ∂g/∂u, ∂g/∂v, ∂g/∂d)
     pos = v.pos
     C = carrier(pos[1])
     prm = params(half_throat(v.chart))
@@ -128,30 +128,43 @@ end
     t = pos[3] / C(prm.cylinder_depth)
     # branch structure mirrors metric(): exactly outer / exactly inner outside the blend
     if primal(t) <= 0
-        g, dgu, dgv, dgd = outer_metric_gradient(sj, pos[3])
+        outer_metric_gradient(sj, pos[3])
     elseif primal(t) >= 1
         g, dgu, dgv = inner_metric_gradient(sj, prm, C)
-        dgd = zero(g)
+        (g, dgu, dgv, zero(g))
     else
         go, dgou, dgov, dgod = outer_metric_gradient(sj, pos[3])
         gi, dgiu, dgiv = inner_metric_gradient(sj, prm, C)
         b = blend_jet(t)
         w = b[1]
         wp = b[2] / C(prm.cylinder_depth) # d(w)/d(depth)
-        g = w * go + (1 - w) * gi
-        dgu = w * dgou + (1 - w) * dgiu
-        dgv = w * dgov + (1 - w) * dgiv
-        dgd = w * dgod + wp * (go - gi) # ∂d gi = 0
+        (w * go + (1 - w) * gi,
+         w * dgou + (1 - w) * dgiu,
+         w * dgov + (1 - w) * dgiv,
+         w * dgod + wp * (go - gi)) # ∂d gi = 0
     end
-    christoffel_from(g, dgu, dgv, dgd, C)
+end
+
+@inline function christoffel(env, v::SituatedPhase)
+    g, dgu, dgv, dgd = metric_gradient(env, v)
+    christoffel_from(g, dgu, dgv, dgd, carrier(v.pos[1]))
+end
+
+# fused geodesic acceleration (reference.jl geodesic_accel carries the meaning):
+# w_u = v^i v^j (∂_i g_uj − ½ ∂_u g_ij), a = −g⁻¹w, Γ never materialized.
+# With t_c = (∂_c g)·v both contractions read off the same three matvecs.
+@inline function geodesic_accel(env, v::SituatedPhase)
+    g, dgu, dgv, dgd = metric_gradient(env, v)
+    vel = v.vel
+    t1 = dgu * vel; t2 = dgv * vel; t3 = dgd * vel
+    w = (vel[1] * t1 + vel[2] * t2 + vel[3] * t3) -
+        carrier(vel[1])(0.5) * SVector(dot(vel, t1), dot(vel, t2), dot(vel, t3))
+    -(inv(g) * w)
 end
 
 # the transport law's right-hand side: covariant rate of w carried along vel
+# (the camera-frame path; the geodesic hot path runs geodesic_accel instead)
 @inline christoffel_pull(Γ, vel, w) = SVector{3}(ntuple(k -> -sum(vel[i] * w[j] * Γ[k, i, j] for i in 1:3, j in 1:3), Val(3)))
-
-@inline function wvel_along_v(env, v::SituatedPhase, w::SituatedPhase)
-    christoffel_pull(christoffel(env, v), v.vel, w.vel)
-end
 
 function to_ambient(env, v::SituatedPhase)
     pl = placement(half_throat(v.chart))
@@ -190,7 +203,7 @@ function settle_phase(env, v::SituatedPhase, max_hops=8)
 end
 
 function geodesic_flow(env, v::SituatedPhase)
-    (v.vel, wvel_along_v(env, v, v))
+    (v.vel, geodesic_accel(env, v))
 end
 
 function geodesic_step(env, v::SituatedPhase, h) # one RK4 step, staying in v's chart
@@ -216,7 +229,7 @@ end
 function flow6(env, chart, u) # phase packed as [pos; vel]
     vel = SVector(u[4], u[5], u[6])
     ph = SituatedPhase(chart, SVector(u[1], u[2], u[3]), vel)
-    vcat(vel, wvel_along_v(env, ph, ph))
+    vcat(vel, geodesic_accel(env, ph))
 end
 
 """

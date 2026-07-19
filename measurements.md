@@ -4,6 +4,57 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-07-19 — Γ-contraction fusion lands: CPU 2–4%, device kernel NEUTRAL — post-collapse the kernel doesn't pay for FLOPs, and cross-session kernel numbers carry GPU clock state
+
+**Context.** The agreed opener (2026-07-18 doctrine discussion, first
+go-wild-with-reference move): never materialize the 27-component Γ on the
+geodesic hot path. Contracted against the symmetric v^i v^j, the two
+symmetric-derivative terms of Γ are the same number, so
+
+    w_u = v^i v^j (∂_i g_uj − ½ ∂_u g_ij),    a = −g⁻¹ w
+
+reference.jl carries the meaning (`geodesic_accel`, next to `wvel_along_v`
+which stays as the general transport law — w ≢ v does not symmetrize);
+production fuses it via t_c = (∂_c g)·v (three matvecs feed both
+contractions), `metric_gradient` extracted from christoffel's branch body so
+`christoffel = christoffel_from ∘ metric_gradient` survives for camera-frame
+transport. geodesic_flow and flow6 switch on both twins; production
+wvel_along_v deleted (dead). Contraction-stage FLOPs roughly 2.5x down
+(~250 → ~95 mults+adds), but the stage is small next to the jet assembly.
+
+**Certification.** Warm probe: fused vs materialized-Γ contraction ≤ 8.7e-17
+relative over every cube chart × depth branch; production vs reference
+≤ 4.4e-16; F32 eltype honest. 451 cold green. physics_diff 0 flips, worst
+deviations moved in-band (cube 6.61e-15 → 8.55e-15, trefoil 1.61e-10 →
+1.65e-10) — **re-baselined with --save** (the pre-agreed moment; baselines
+now read 0). gpu_tracer 768×576 parity: F64 0 flips, 377k/442k bit-identical,
+max 8.6e-8 rad; F32 1 flip + 3 res-mismatch in the 14c band.
+
+**Perf: the benchmark trap first.** First gpu_tracer read 0.421 s kernel
+(F32 sweep=64 bin) against the recorded 0.386 — an apparent 9% regression.
+A/B against a pre-fusion jj workspace killed it: the *baseline* also
+measures 0.42–0.46 today when run cold-ish, and both checkouts settle near
+0.38 after two full-size warm passes. Last session's 0.386 was a
+warm-clocks number. **Protocol from here: device A/B comparisons must be
+same-day, interleaved, after ≥2 full-size warm passes; min-of-reps is the
+statistic** (noise is one-sided). Alternated 15-rep runs
+(baseline/fused/baseline/fused), kernel min: 0.382 / 0.375 / 0.382 / 0.380.
+
+**Result: device kernel neutral (±1%), CPU wins 2–4%** (768×576 wavefront
+F32 1.29 → 1.26, recursive 2.00 → 1.93; 192×144 wavefront 0.081 → 0.078,
+recursive 0.129 → 0.123 — CPU numbers, unlike GPU ones, reproduce across
+sessions). Registers 255 unchanged; local 13,968 → 13,976 B/thread (+8,
+noise). Why neutral: post-collapse Γ already lived entirely inside flow6's
+inlined frame — the fusion removes arithmetic but not one byte of the local
+ABI traffic the kernel is bandwidth-bound on (2026-07-18 diagnosis,
+now confirmed from the FLOP side). Corollary that re-ranks the levers:
+**FLOP reduction does not pay on device until the frame-traffic gate is
+broken** — sweep_ray's 7.9K frame (lever a) is the confirmed next target,
+and the fusion's FLOP savings should be re-credited on device *after* the
+kernel stops being traffic-bound. No flight-segment run: a lever neutral in
+the static probe (which already contains the 46% tail-round regime) has
+nothing for workload composition to amplify.
+
 ## 2026-07-18b — flyvideo grows gpu=1; the first F32 flight finds a latent crash in the certified CPU wavefront; GPU 2.3x CPU on the production-resolution flythrough, CPU wins at 192×144
 
 **Context.** Kaarel's catch: the 07-17 space flythrough was assumed

@@ -4,7 +4,7 @@ Companion to kaarel's journal (`plan/kaarel.md`); holds current state, the
 open decisions, and standing conventions. Dated session records live
 alongside as `plan/YYYY-MM-DD.md`; findings with their why-chains live in
 repo-root `measurements.md`; the code map is repo-root `atlas.md`. Last
-updated 2026-07-18. **This file is the resume point** — read it plus `jj log`
+updated 2026-07-19. **This file is the resume point** — read it plus `jj log`
 before touching code. This file describes the present; the history of how we
 got here lives in the session logs and jj descriptions, not here.
 
@@ -20,8 +20,9 @@ cameras → piecewise-geodesic flight with mouth crossings → adaptive/uniform
 fly-through video.
 
 Certification state: 451 tests cold green; `scripts/physics_diff.jl` passes
-its baselines (0 side flips, worst deviation 1.26e-10, inside the 1e-9
-arithmetic-reordering band); `scripts/precision_diff.jl` is the standing F32
+its baselines (0 side flips; baselines re-saved 2026-07-19 at the
+Γ-fusion re-baseline moment, deviations currently read 0);
+`scripts/precision_diff.jl` is the standing F32
 acceptance instrument and reproduces its accepted shape. The oracle tiering
 holds: reference.jl is the sole semantic ground truth; production is
 certified against it; the jet christoffel against its AD twin
@@ -42,7 +43,16 @@ own ABI-stack local traffic, NOT occupancy-limited (register caps measured
 twice, always lose); kernel time is two regimes — a throughput-bound first
 round and latency-bound straggler tail rounds (46% of kernel for <1% of
 rays, the budget-capped filament pixels). The production Γ path is AD-free
-closed-form, which also settles shader portability.
+closed-form, which also settles shader portability. **2026-07-19: the
+Γ-contraction fusion landed** (geodesic hot path never materializes Γ;
+reference geodesic_accel carries the meaning): CPU another 2–4%, device
+kernel *neutral* — post-collapse Γ already lived inside flow6's frame, so
+removing FLOPs touches none of the local traffic the kernel is
+bandwidth-bound on. Confirmed corollary: on device, traffic levers come
+before FLOP levers. Benchmark protocol note: GPU kernel numbers do not
+reproduce across sessions (clock state); device A/B runs same-day,
+interleaved, ≥2 full-size warm passes, min-of-reps (measurements.md
+2026-07-19).
 
 Latest flight work (2026-07-17 video session): flyvideo.jl carries the full
 authoring surface — scene=/pacing knobs, sky1=/sky2= equirect paths,
@@ -169,17 +179,18 @@ video benefits as soon as flyvideo grows a GPU path (deferred item from
    @inline tree collapse into flow6 bought 31% kernel / 15% CPU, and
    occupancy was ruled out as the gate (bandwidth on local traffic is;
    register caps lose, measured twice; the blowup boundary is mapped —
-   inlining the structural layer OOMs at 127–188 KB/thread). **Next
-   session opens with the Γ-contraction fusion (agreed 2026-07-18, the
-   first go-wild-with-reference move — kaarel's doctrine call: production
-   may fuse into opaque blocks, reference.jl carries the meaning): never
-   materialize the 27-component Γ; w_u = v^i v^j (∂_i g_{uj} − ½ ∂_u
-   g_{ij}), a = −g⁻¹w, specialized to hot-path w ≡ v (general transport
-   stays for camera frames); real FLOP reduction; reference.jl first,
-   production follows, re-baseline physics_diff (the deviations already
-   moved in-band 2026-07-18 — this is the anticipated re-baseline
-   moment).** Behind it, ranked: (a) sweep_ray's own 7.9K frame, the
-   biggest remaining, its traffic per attempt iteration; (b) the
+   inlining the structural layer OOMs at 127–188 KB/thread). **Γ-contraction
+   fusion done (2026-07-19, measurements.md entry)**: the first
+   go-wild-with-reference move (kaarel's doctrine call: production may fuse
+   into opaque blocks, reference.jl carries the meaning) — reference.jl
+   geodesic_accel + fused production twin, physics_diff re-baselined (the
+   anticipated moment). Outcome: CPU 2–4%, device kernel neutral (±1%) —
+   Γ was already frame-local post-collapse, so FLOP cuts don't touch the
+   gating local traffic; on device, traffic levers before FLOP levers, and
+   the fusion's FLOP savings get re-credited once the kernel stops being
+   traffic-bound. Next, ranked: (a) sweep_ray's own 7.9K frame, the
+   biggest remaining, its traffic per attempt iteration — the confirmed
+   gate; (b) the
    straggler tail — 46% of kernel serves <1% of rays at ~0.5 ms serial
    latency per attempt: CPU tail handoff via the sweep_stage! seam (a
    400-attempt straggler is ~1 ms serial on host vs ~200 ms on device),
