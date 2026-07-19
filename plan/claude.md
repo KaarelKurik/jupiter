@@ -180,11 +180,37 @@ renders (flyvideo gpu=1).
      initial 442k F64 entry solves + device throat build, pipelinable
      against round 1 (or an in-kernel entry solve; the F64 host solve was
      a design convenience, never a requirement).
+   - (e) **Integrator economy (kaarel's question, 2026-07-19, assessed
+     end-of-session; not yet scheduled)**: a cheaper integrator moves the
+     accuracy/speed tradeoff — possibly acceptably, because (i) at F32 the
+     14c data reads as roundoff-dominated ("just rounding"), so DP5(4)'s
+     order may be buying truncation accuracy below the noise floor; (ii)
+     each step is already capped at chart scale (h ≤ 0.25/|v|) — wherever
+     the cap, not the error controller, binds, 7 stages of order-5 are
+     wasted; (iii) the straggler tail is Lyapunov-dead pointwise (accuracy
+     there is statistical by the standing acceptance doctrine), and
+     cheaper attempts stretch the tail's budget-as-effort semantics.
+     Gate on three cheap probes before any commitment: the h-cap-binding
+     fraction; the Richardson h/tol-refinement probe (also closes the
+     standing no-converged-ground-truth open item — it is the instrument
+     that says how much accuracy slack exists); and the zero-code
+     experiment — the tolerance=0 fixed-RK4 branch already in sweep_ray
+     vs dopri, judged by the decomposition metric + eyeballed renders.
+     Candidates if it pays: Bogacki–Shampine 3(2) (keeps error control),
+     fixed RK4, or per-regime mixing (DP5 bulk, cheap tail — composes
+     with (b), precedent in the escalation machinery). A full switch is a
+     deliberate physics change: reference first, re-baseline, re-accept.
+     **Free and bit-identical regardless (fold into the (b) session):
+     dopri k1 reuse** — k1 = f(u) is h-independent, so every rejected
+     attempt recomputes an identical k1, and on accepted no-hop steps
+     (settle_phase returns the phase unchanged) k7 = f(u5) IS the next
+     k1 (FSAL); caching within the sweep loop needs no record change and
+     saves up to ~1/7 of flow6 evaluations.
    Frame batching for offline video unchanged (latency-hostile in
    realtime); persistent threads demoted (the tail is latency-bound, not
-   wave-quantized). Tools ask pending: `pacman -S nsight-compute
-   nsight-systems` (kaarel to install) — ncu counters and nsys timelines
-   sharpen (b) and (c).
+   wave-quantized). Tools: nsight-compute + nsight-systems installed
+   (2026-07-19) — ncu stall-reason counters to confirm the local-latency
+   story directly, nsys timelines for (c) pool-init overlap.
 
 Unordered, as wanted:
 
