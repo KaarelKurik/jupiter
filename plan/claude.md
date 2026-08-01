@@ -4,7 +4,7 @@ Companion to kaarel's journal (`plan/kaarel.md`); holds current state, the
 open decisions, and standing conventions. Dated session records live
 alongside as `plan/YYYY-MM-DD.md`; findings with their why-chains live in
 repo-root `measurements.md`; the code map is repo-root `atlas.md`. Last
-updated 2026-07-19. **This file is the resume point** — read it plus `jj log`
+updated 2026-08-01. **This file is the resume point** — read it plus `jj log`
 before touching code. This file describes the present; the history of how we
 got here lives in the session logs and jj descriptions, not here.
 
@@ -19,9 +19,11 @@ textured equirect skies → parallel-transported camera frames → in-throat
 cameras → piecewise-geodesic flight with mouth crossings → adaptive/uniform
 fly-through video.
 
-Certification state: 451 tests cold green; `scripts/physics_diff.jl` passes
-its baselines (0 side flips; baselines re-saved 2026-07-19 at the
-Γ-fusion re-baseline moment, deviations currently read 0);
+Certification state: 782 tests cold green (451 + the 2026-08-01 pullback
+and directional-jet batteries); `scripts/physics_diff.jl` passes its
+baselines (0 side flips; baselines re-saved 2026-07-19 at the Γ-fusion
+moment; since the 2026-08-01 fused accel deviations read in-band
+5.6e-15/7.1e-11 — re-save pending kaarel's call);
 `scripts/precision_diff.jl` is the standing F32
 acceptance instrument and reproduces its accepted shape. The oracle tiering
 holds: reference.jl is the sole semantic ground truth; production is
@@ -50,7 +52,12 @@ wall, raymap level). Standing diagnosis: the kernel is bandwidth-bound on
 its own local-memory traffic, NOT occupancy-limited (register caps always
 lose); ~90% of per-attempt local traffic is the stage tower's interior —
 live width exceeds the 255-register cap and spills; call structure is no
-longer a factor, and FLOP cuts alone don't move the kernel. Device
+longer a factor, and FLOP cuts alone don't move the kernel. Deep fusion
+(2026-08-01) sharpened the diagnosis: the gate is the corner-loop
+*transient* set (pd tuples, wirtinger intermediates), which output-lane
+fusion can't touch — the fused Gauss-form accel landed kernel-NEUTRAL,
+CPU −3%, kept for the CPU win, the simpler meaning-carrier, and as the
+substrate for item 1's deviation machinery. Device
 benchmark protocol: kernel numbers don't reproduce across sessions (clock
 state) — A/B same-day, interleaved, ≥2 full-size warm passes, min-of-reps;
 wall is the honest metric (host tail time is deliberately outside
@@ -170,29 +177,23 @@ renders (flyvideo gpu=1).
    Mapped constraints: structural-layer inlining OOMs at 127–188
    KB/thread; sweep_ray's 7.9K depot is footprint-not-traffic (retired);
    remaining stage-tower spill is live-width-forced, so only narrower
-   objects — not call restructuring — cut the dominant traffic. **Next:
-   (d) deep fusion (agreed 2026-07-19), with (c) promoted by the handoff
-   to the probe workload's biggest single item — sequencing is kaarel's
-   call.**
-   - (d) **Deep fusion** (kaarel's fuller reading of the opaque-block
-     doctrine, promoted by the census): fuse chart logic + interpolation
-     + contraction *algebraically*. With v constant per RHS evaluation,
-     the acceleration is the Euler–Lagrange form a = g⁻¹(½∇(vᵀgv) −
-     D_v(gv)) — all derivatives of contracted objects (with g = (∂c)ᵀ(∂c):
-     vᵀgv = |D_v c|², gv = (∂c)ᵀD_v c) — so a directional-jet tower
-     (v-contracted lanes from eval_packed_partials up, instead of all 10
-     partials) shrinks exactly the live width that is the dominant local
-     traffic, plus a real CPU FLOP cut. Targets the RK4 stage tower (the
-     executing branch — 4 stages/attempt). Cost: a second jet algebra
-     beside Jet3 through the whole chain (packed eval → wedge/cpow →
-     wirtinger → blend → metric); production goes genuinely opaque
-     (doctrine covers it; reference states the EL form as the
-     meaning-carrier).
-   - (c) **pool-init overlap** — the wall-kernel gap (~0.19 s at 768×576,
-     now the probe workload's biggest single item post-handoff) is the
-     initial 442k F64 entry solves + device throat build, pipelinable
-     against round 1 (or an in-kernel entry solve; the F64 host solve was
-     a design convenience, never a requirement). nsys timelines are the
+   objects — not call restructuring — cut the dominant traffic. **(d) deep
+   fusion SERVED 2026-08-01** (measurements.md 2026-08-01 + 01b): the EL
+   contraction collapses to the Gauss formula w = Jᵀ(D_vD_v c) (reference
+   pullback_accel carries it), the 8-lane DJet tower + fused accel landed
+   certified (782 cold, physics_diff in-band unsaved, precision/parity in
+   character) — kernel NEUTRAL, CPU −3%: the spill gate turned out to be
+   the corner-loop transients, not output lanes; kept for the CPU win,
+   the simpler meaning-carrier, and as item-1 substrate. kernel_sweep now
+   threads env (the seam reaches the device). A/B protocol refinement:
+   in-process wall comparisons need ABBA ordering (position artifact
+   ±5–10%; kernel numbers are position-robust). **Next: (c).**
+   - (c) **pool-init overlap** — the wall-kernel gap (~0.2 s at 768×576,
+     the probe workload's biggest single item post-handoff, now dwarfing
+     anything left in the kernel at this workload) is the initial 442k
+     F64 entry solves + device throat build, pipelinable against round 1
+     (or an in-kernel entry solve; the F64 host solve was a design
+     convenience, never a requirement). nsys timelines are the
      instrument.
    - (e) **Integrator economy — reframed 2026-07-19c**: production is
      *already* the cheap fixed-step RK4 integrator (h = 0.05 constant, no

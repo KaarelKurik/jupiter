@@ -234,13 +234,23 @@ implementations coexist deliberately:
    holomorphic via Wirtinger factorization, one derivative-carrying Horner
    table read, scalar exp(−1/x) blend chains, depth entering exactly
    (collar columns linear in d). This is what runs, on CPU and in-kernel.
+   Since 2026-08-01 the *geodesic* path runs the directional variant: the
+   8-lane `DJet` tower (full order-2 + doubly-velocity-contracted thirds
+   hu/hv, `surface_djet`) feeding the fused `geodesic_accel` — outer arm
+   w = Jᵀ(D_vD_v c) (the Gauss formula; `Reference.pullback_accel` carries
+   the meaning), inner arm the same collapse on the surface factor, blend
+   arm the ω-linear combination. The full Jet3 tower stays live for
+   `christoffel`/camera transport, and the metric_gradient acceleration
+   body is retained as `geodesic_accel_gradient`, the fused path's oracle.
 
 The discipline holding them together: **value lanes reproduce the plain
 evaluator op-for-op** (same divisions, same addition order), so values are
 bit-identical and any mismatch is a derivative lane. Certification tiers
 (each layer checked against the one above): reference ← production AD twin
-← jet christoffel ← device kernel; wavefront ≡ recursive tracer
-bit-identically; `surface_jet` value lane ≡ `surface()`.
+← jet christoffel ← device kernel; the fused accel against
+`geodesic_accel_gradient` (and DJet ops against contracted Jet3 ops, exact
+on order-2 lanes); wavefront ≡ recursive tracer bit-identically;
+`surface_jet` value lane ≡ `surface()`.
 
 ## Where precision lives
 
@@ -282,9 +292,9 @@ Day-to-day iteration goes through the warm daemon `scripts/jd`
 | `src/fit.jl` | Ying–Zorin per-vertex polynomial fitting to CC limits | `fit_geometry`, `yz_degree_bound` |
 | `src/throat.jl` | the type layer: thick `Surface`/`Throat`, thin handles, phases; packed Horner tables | `Surface`, `Throat`, `HalfThroat`, `Chart`, `SituatedPhase`, `AmbientRay`, `eval_packed` |
 | `src/ad.jl` | the AD contact surface (only file touching ForwardDiff); carrier/primal | `directional`, `jacobian_columns`, `value_and_jacobian_columns`, `situate`, `carrier` |
-| `src/jets.jl` | closed-form order-3 jet algebra (real, complex/holomorphic, 1D chains, Horner partials) | `Jet3`, `CJet`, `leibniz`, `jdiv`, `compose1`, `wirtinger_compose`, `eval_packed_partials`, `blend_jet` |
+| `src/jets.jl` | closed-form order-3 jet algebra (real, complex/holomorphic, 1D chains, Horner partials) + the 8-lane directional algebra | `Jet3`, `CJet`, `leibniz`, `jdiv`, `compose1`, `wirtinger_compose`, `eval_packed_partials`, `blend_jet`, `DJet`, `dcontract`, `dwirtinger_compose` |
 | `src/chart.jl` | wedge geometry, corner blending, blended surface + its jet, chart transitions | `surface`, `surface_jet`, `wedge_square_coords`, `blend_scalar`, `chart_transition` |
-| `src/geodesic.jl` | metric (outer/inner/blend), christoffels (jet + AD twin), integrators, settle, transport, ray emission | `metric`, `christoffel`, `christoffel_ad`, `trace_geodesic`, `settle_phase`, `to_ambient`, `trace_transport`, `emit_ray` |
+| `src/geodesic.jl` | metric (outer/inner/blend), christoffels (jet + AD twin), fused Gauss-form acceleration, integrators, settle, transport, ray emission | `metric`, `christoffel`, `christoffel_ad`, `geodesic_accel`, `geodesic_accel_gradient`, `trace_geodesic`, `settle_phase`, `to_ambient`, `trace_transport`, `emit_ray` |
 | `src/mouth.jl` | ambient→throat entry: Mouth interface, tessellation + threaded BVH, Newton refinement | `Mouth`, `TessellatedMouth`, `enter_mouth`, `enter_transport`, `nearest_mouth_hit` |
 | `src/render.jl` | scenes, budgets, cameras, recursive raymap driver, skies, PPM I/O | `Scene`, `RayBudget`, `Camera`, `SituatedCamera`, `render_raymap`, `shade`, `TexturedSky`, `load_ppm` |
 | `src/wavefront.jl` | staged tracer: isbits ray records, kernel-shaped sweep, host entry stage, driver | `WavefrontRay`, `sweep_ray`, `run_wavefront!`, `wavefront_raymap` |

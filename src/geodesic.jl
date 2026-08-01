@@ -150,16 +150,94 @@ end
     christoffel_from(g, dgu, dgv, dgd, carrier(v.pos[1]))
 end
 
-# fused geodesic acceleration (reference.jl geodesic_accel carries the meaning):
-# w_u = v^i v^j (∂_i g_uj − ½ ∂_u g_ij), a = −g⁻¹w, Γ never materialized.
-# With t_c = (∂_c g)·v both contractions read off the same three matvecs.
-@inline function geodesic_accel(env, v::SituatedPhase)
+# the metric_gradient elaboration of the acceleration (reference.jl
+# geodesic_accel carries the law): w_u = v^i v^j (∂_i g_uj − ½ ∂_u g_ij),
+# a = −g⁻¹w. Kept as the in-tree oracle for the fused directional tower below
+# (certification tiers: reference ← christoffel_ad ← this ← geodesic_accel).
+@inline function geodesic_accel_gradient(env, v::SituatedPhase)
     g, dgu, dgv, dgd = metric_gradient(env, v)
     vel = v.vel
     t1 = dgu * vel; t2 = dgv * vel; t3 = dgd * vel
     w = (vel[1] * t1 + vel[2] * t2 + vel[3] * t3) -
         carrier(vel[1])(0.5) * SVector(dot(vel, t1), dot(vel, t2), dot(vel, t3))
     -(inv(g) * w)
+end
+
+# ---- fused geodesic acceleration on the directional tower (deep fusion,
+# 2026-08-01; reference.jl pullback_accel carries the meaning). Outer arm:
+# g = JᵀJ is the flat collar pullback, so w = Jᵀ(D_vD_v c) — the Gauss form;
+# thirds of the surface enter only doubly contracted (DJet's hu/hv). Inner
+# arm: the same collapse on the surface factor of the product metric
+# (cross_scale·(∂s)ᵀ(∂s) ⊕ depth_scale, d-free — no thirds at all). Blend
+# arm: the ω-linear combination plus ω′ terms in g_ov, g_iv, vᵀg_ov, vᵀg_iv
+# (probe-verified against reference AD, measurements.md 2026-08-01).
+
+# normal chain and collar Gauss data from the surface DJet: J's columns need
+# n̂, nu, nv fully; D_vD_v c = D_wD_w s − d·D_wD_wn̂ − 2 v_d·D_wn̂ needs the
+# thirds only through S.hu/S.hv. dws* = D_w ∂*s, ddws = D_wD_w s.
+@inline function outer_gauss(S::DJet, dwsu, dwsv, ddws, d, vel)
+    m = cross(S.fu, S.fv)
+    mu = cross(S.fuu, S.fv) + cross(S.fu, S.fuv)
+    mv = cross(S.fuv, S.fv) + cross(S.fu, S.fvv)
+    m1 = vel[1] * mu + vel[2] * mv                                # D_w m
+    m2 = cross(S.hu, S.fv) + 2 * cross(dwsu, dwsv) + cross(S.fu, S.hv) # D_wD_w m
+    r = sqrt(dot(m, m))
+    n = m / r
+    nu = (mu - (dot(m, mu) / r) * n) / r
+    nv = (mv - (dot(m, mv) / r) * n) / r
+    ρ1 = dot(m, m1) / r
+    n1 = (m1 - ρ1 * n) / r                                        # D_w n̂
+    ρ2 = (dot(m1, m1) + dot(m, m2) - ρ1^2) / r
+    n2 = (m2 - 2 * (ρ1 * n1) - ρ2 * n) / r                        # D_wD_w n̂
+    e1 = S.fu - d * nu
+    e2 = S.fv - d * nv
+    ddc = ddws - d * n2 - (2 * vel[3]) * n1                       # D_vD_v c
+    g = sym3(dot(e1, e1), dot(e1, e2), -dot(e1, n),
+             dot(e2, e2), -dot(e2, n), dot(n, n))
+    (g, SVector(dot(e1, ddc), dot(e2, ddc), -dot(n, ddc)))
+end
+
+@inline function inner_gauss(S::DJet, ddws, prm, C)
+    cs = C(prm.cross_scale)
+    z = zero(cs)
+    g = SMatrix{3, 3}(cs * dot(S.fu, S.fu), cs * dot(S.fv, S.fu), z,
+                      cs * dot(S.fu, S.fv), cs * dot(S.fv, S.fv), z,
+                      z, z, C(prm.depth_scale))
+    (g, SVector(cs * dot(S.fu, ddws), cs * dot(S.fv, ddws), z))
+end
+
+@inline function geodesic_accel(env, v::SituatedPhase)
+    pos = v.pos
+    vel = v.vel
+    C = carrier(pos[1])
+    prm = params(half_throat(v.chart))
+    w = SVector(vel[1], vel[2])
+    S = surface_djet(env, v.chart, SVector(pos[1], pos[2]), w)
+    dwsu = vel[1] * S.fuu + vel[2] * S.fuv
+    dwsv = vel[1] * S.fuv + vel[2] * S.fvv
+    ddws = vel[1] * dwsu + vel[2] * dwsv
+    d = pos[3]
+    t = d / C(prm.cylinder_depth)
+    # branch structure mirrors metric()/metric_gradient()
+    if primal(t) <= 0
+        g, wv = outer_gauss(S, dwsu, dwsv, ddws, d, vel)
+        -(inv(g) * wv)
+    elseif primal(t) >= 1
+        g, wv = inner_gauss(S, ddws, prm, C)
+        -(inv(g) * wv)
+    else
+        go, wo = outer_gauss(S, dwsu, dwsv, ddws, d, vel)
+        gi, wi = inner_gauss(S, ddws, prm, C)
+        b = blend_jet(t)
+        ω = b[1]
+        ωp = b[2] / C(prm.cylinder_depth) # dω/d(depth)
+        gov = go * vel
+        giv = gi * vel
+        qz = zero(ω)
+        wv = ω * wo + (1 - ω) * wi + (ωp * vel[3]) * (gov - giv) -
+             (C(0.5) * ωp) * SVector(qz, qz, dot(vel, gov) - dot(vel, giv))
+        -(inv(ω * go + (1 - ω) * gi) * wv)
+    end
 end
 
 # the transport law's right-hand side: covariant rate of w carried along vel

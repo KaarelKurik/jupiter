@@ -145,6 +145,50 @@ end
     (w, val)
 end
 
+# directional twin of corner_contribution_jet: same chain on 8 lanes, thirds
+# entering only Ω-contracted. All DJet lanes are partials in the *center*
+# chart's (u,v), so the direction w never transforms; only the polynomial
+# read sees the per-corner pushforward Ω = ζ'·ŵ.
+@inline function corner_contribution_djet(chart, corner, stj::CJet, w)
+    sj = dre_jet(stj, w)
+    tj = dim_jet(stj, w)
+    bs = dcompose1(blend_jet(sj.f)..., w, sj)
+    bt = dcompose1(blend_jet(tj.f)..., w, tj)
+    bw = dleibniz(*, w, bs, bt)
+    c = induced_chart(half_throat(chart), vertex_index(corner))
+    ζj = square_coords_to_chart_cjet(valence(corner), half_edge_offset(corner), stj)
+    Ω = complex(w[1], w[2]) * ζj.w1
+    pd = eval_packed_partials(packed_polys(geometry(half_throat(chart)))[vertex_index(c)],
+                              real(ζj.w0), imag(ζj.w0))
+    val = dvjet3(dwirtinger_compose(contract_thirds(pd[1], real(Ω), imag(Ω)), ζj.w1, ζj.w2, ζj.w3, w),
+                 dwirtinger_compose(contract_thirds(pd[2], real(Ω), imag(Ω)), ζj.w1, ζj.w2, ζj.w3, w),
+                 dwirtinger_compose(contract_thirds(pd[3], real(Ω), imag(Ω)), ζj.w1, ζj.w2, ζj.w3, w))
+    (bw, val)
+end
+
+"""
+directional jet of surface() for a fixed (u,v) direction w: lanes f..fvv
+bit-identical to surface_jet's, hu/hv the doubly-w-contracted third lanes.
+The fused geodesic acceleration (geodesic.jl) is its only intended caller.
+"""
+@inline function surface_djet(env, chart, uv, w)
+    n = valence(chart)
+    k = wedge_index(n, primal.(uv))
+    corner = ccw(half_edge_handle(chart), k)
+    stj = wedge_square_coords_cjet(n, k, uv)
+    bw, val = corner_contribution_djet(chart, corner, stj, w)
+    acc = dleibniz(*, w, bw, val)
+    tw = bw
+    for _ in 1:3
+        corner = next(corner)
+        stj = next_corner_cjet(stj)
+        bw, val = corner_contribution_djet(chart, corner, stj, w)
+        acc = djadd(acc, dleibniz(*, w, bw, val))
+        tw = djadd(tw, bw)
+    end
+    ddiv(w, acc, tw)
+end
+
 """
 order-3 (u,v) jet of surface(): value lane bit-identical to surface(), the ten
 derivative lanes closed-form. christoffel assembles g and ∂g from this.

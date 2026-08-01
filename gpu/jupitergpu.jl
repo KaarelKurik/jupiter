@@ -54,10 +54,10 @@ end
 
 # the tracer kernel: one thread marches one ray — sweep_ray's settled
 # steps, chart hops, half transitions, and to_ambient exit, unmodified
-function kernel_sweep(recs, throat, budget, sweep)
+function kernel_sweep(recs, env, throat, budget, sweep)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     i > length(recs) && return nothing
-    recs[i] = J.sweep_ray(nothing, throat, budget, recs[i], sweep)
+    recs[i] = J.sweep_ray(env, throat, budget, recs[i], sweep)
     nothing
 end
 
@@ -93,7 +93,7 @@ function (ds::DeviceSweep)(pool::Vector{J.WavefrontRay{T}}, active, env, throat,
     recs = pool[active]
     drecs = CuArray(recs)
     t = CUDA.@elapsed @cuda threads = ds.threads blocks = cld(length(recs), ds.threads) kernel_sweep(
-        drecs, ds.dthroat, budget, sweep)
+        drecs, env, ds.dthroat, budget, sweep)
     ds.kernel_seconds[] += t
     copyto!(recs, drecs)
     pool[active] = recs

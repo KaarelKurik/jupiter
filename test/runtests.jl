@@ -136,6 +136,95 @@ end
                        J.christoffel(nothing, J.SituatedPhase(c, [0.2, 0.15, 0.25], [0.1, 0.2, 0.3]))) < 1e-4
 end
 
+@testset "directional jets and the fused acceleration" begin
+    # every DJet op against contracting the certified Jet3 op's output: order-2
+    # lanes must match op-for-op (exact equality), h lanes to reordering tolerance
+    golden = 2pi * 0.6180339887498949
+    series(seed, n) = [cos(golden * (seed + k)) + 0.1 * sin(3.7 * (seed - k)) for k in 1:n]
+    function mkjet(seed; lift=0.0)
+        s = series(seed, 10)
+        s[1] += lift
+        J.Jet3(s...)
+    end
+    dlanes(dj) = (dj.f, dj.fu, dj.fv, dj.fuu, dj.fuv, dj.fvv)
+    hgap(dir, want) = maximum(abs, [dir.hu - want.hu, dir.hv - want.hv]) /
+                      (1 + maximum(abs, [want.hu, want.hv]))
+
+    for seed in 1:5
+        a = mkjet(seed)
+        b = mkjet(seed + 17, lift=3.0)
+        w = J.SVector(series(seed + 31, 2)...)
+        da = J.dcontract(w, a)
+        db = J.dcontract(w, b)
+
+        for (full, dir) in ((J.jadd(a, b), J.djadd(da, db)),
+                            (J.leibniz(*, a, b), J.dleibniz(*, w, da, db)),
+                            (J.jdiv(a, b), J.ddiv(w, da, db)),
+                            (J.compose1(0.7, -1.3, 0.4, 2.1, a), J.dcompose1(0.7, -1.3, 0.4, 2.1, w, da)))
+            want = J.dcontract(w, full)
+            @test dlanes(dir) == dlanes(want)
+            @test hgap(dir, want) < 1e-12
+        end
+
+        cj = J.CJet(complex(series(seed + 3, 2)...), complex(series(seed + 7, 2)...),
+                    complex(series(seed + 11, 2)...), complex(series(seed + 13, 2)...))
+        for (full, dir) in ((J.re_jet(cj), J.dre_jet(cj, w)),
+                            (J.im_jet(cj), J.dim_jet(cj, w)))
+            want = J.dcontract(w, full)
+            @test dlanes(dir) == dlanes(want)
+            @test hgap(dir, want) < 1e-12
+        end
+
+        pd10 = tuple(series(seed + 41, 10)...)
+        z1 = complex(series(seed + 43, 2)...)
+        z2 = complex(series(seed + 47, 2)...)
+        z3 = complex(series(seed + 53, 2)...)
+        Ω = complex(w[1], w[2]) * z1
+        full = J.wirtinger_compose(pd10, z1, z2, z3)
+        dir = J.dwirtinger_compose(J.contract_thirds(pd10, real(Ω), imag(Ω)), z1, z2, z3, w)
+        want = J.dcontract(w, full)
+        @test dlanes(dir) == dlanes(want)
+        @test hgap(dir, want) < 1e-12
+    end
+
+    # the assembled tower: surface_djet against contracting surface_jet
+    for vi in (1, 4), i in 1:4
+        r = 0.05 + 0.09 * i
+        uv = J.SVector((r .* [cos(golden * (i + 3 * vi)), sin(golden * (i + 3 * vi))])...)
+        w = J.SVector(cos(2.1 * i + vi), sin(1.3 * i - vi))
+        cc = J.induced_chart(ht, vi)
+        dir = J.surface_djet(nothing, cc, uv, w)
+        want = J.dcontract(w, J.surface_jet(nothing, cc, uv))
+        @test dlanes(dir) == dlanes(want)
+        @test maximum(abs, [dir.hu - want.hu; dir.hv - want.hv]) /
+              (1 + maximum(abs, [want.hu; want.hv])) < 1e-10
+    end
+
+    # the fused acceleration against its metric_gradient oracle, every cube
+    # chart across all depth branches (outer / boundary / blend / inner)
+    for vi in 1:length(m.vertices), i in 1:2, d in (-0.05, 0.0, 0.25, 0.5, 0.6)
+        r = 0.07 + 0.11 * i
+        uv = r .* [cos(golden * (i + 5 * vi)), sin(golden * (i + 5 * vi))]
+        for vel in ([0.1, 0.2, 0.3], [-0.4, 0.15, -0.6], [0.0, 0.0, 0.0])
+            v = J.SituatedPhase(J.induced_chart(ht, vi), [uv; d], vel)
+            aG = J.geodesic_accel_gradient(nothing, v)
+            aF = J.geodesic_accel(nothing, v)
+            @test maximum(abs, aF - aG) / (1 + maximum(abs, aG)) < 1e-10
+        end
+    end
+
+    # Float32 eltype honesty on Float32 tables
+    surf32d = J.Surface(m, J.chart_polys(surf), [Float32.(p) for p in J.packed_polys(surf)])
+    th32d = J.Throat(surf32d, J.params(th), th.placements)
+    v32d = J.SituatedPhase(J.induced_chart(J.HalfThroat(th32d, 1), 1),
+                           J.SVector{3, Float32}(0.2, 0.15, 0.25),
+                           J.SVector{3, Float32}(0.1, 0.2, 0.3))
+    a32 = J.geodesic_accel(nothing, v32d)
+    @test eltype(a32) == Float32
+    @test maximum(abs, Float64.(a32) -
+                       J.geodesic_accel(nothing, J.SituatedPhase(c, [0.2, 0.15, 0.25], [0.1, 0.2, 0.3]))) < 1e-3
+end
+
 @testset "geodesics" begin
     energy(v) = v.vel' * J.metric(nothing, v.chart, v.pos) * v.vel
 

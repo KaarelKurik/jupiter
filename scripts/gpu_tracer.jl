@@ -67,7 +67,7 @@ function main()
         r0 = J.WavefrontRay{T}(J.RAY_THROAT, Int8(1), Int32(m.vertex_he[1]), Int32(1), Int32(0),
                                T(0.05), J.SVector{3, T}(0.1, 0.05, 0.2), J.SVector{3, T}(0.05, 0.02, 0.4))
         dth = G.device_throat(T === Float32 ? th32 : th, T)
-        kc = @cuda launch = false G.kernel_sweep(CuArray([r0]), dth, budget, 8)
+        kc = @cuda launch = false G.kernel_sweep(CuArray([r0]), nothing, dth, budget, 8)
         mem = CUDA.memory(kc)
         println(T, " kernel: ", CUDA.registers(kc), " registers, ", mem.local, " local (spill) bytes/thread")
     end

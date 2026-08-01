@@ -4,6 +4,67 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-08-01b — deep fusion lands certified and kernel-NEUTRAL: the spill gate is the corner-loop transient set, not the tower's output lanes; CPU −3%; a wall position-artifact refines the A/B protocol
+
+**What landed.** The 8-lane directional algebra (`DJet` in jets.jl: full
+Jet2 + hu/hv = D_wD_w of the first layer; ops djadd/dleibniz/ddiv/dcompose1/
+dre_jet/dim_jet/dwirtinger_compose, each with its h-chain rule derived twice
+— real chain rule and Wirtinger — and certified against contracting the
+Jet3 op), `surface_djet` (chart.jl, same corner chain; all DJet lanes are
+center-chart partials so the direction never transforms, only the
+polynomial read sees Ω = ζ′·ŵ), and the fused `geodesic_accel`
+(geodesic.jl): outer arm w = Jᵀ(D_vD_v c) (Gauss), inner arm the same
+collapse on the surface factor (wi = cs·(∂s)ᵀ(D_wD_w s), wi_d = 0 — the
+d-velocity-constant cylinder fact falling out), blend arm the ω-linear
+combination + ω′ terms. The metric_gradient body is retained as
+`geodesic_accel_gradient`, the in-tree oracle; christoffel/transport keep
+the Jet3 tower. `kernel_sweep` now threads `env` (it hardcoded `nothing` —
+the one place the env dispatch seam didn't reach; isbits envs ride fine),
+which is also what made the A/B interleavable in-process.
+
+**Certification.** 782 cold green (328 new: op-level contraction identities
+with order-2 lanes required *exactly equal* — they reuse the Jet2 formulas
+op-for-op — h lanes ≤1e-12; surface_djet vs contracted surface_jet, exact
+on 6 lanes; fused vs gradient accel over every cube chart × all depth
+branches × velocities incl. zero ≤1e-10; F32 eltype honesty). physics_diff
+0 flips, 5.6e-15/7.1e-11 — in-band, baselines NOT re-saved (kaarel's
+moment). precision_diff reproduces the accepted F32 shape (0 flips, f32/ulp
+offsets 27–28 log2, passage stratification in character). gpu_tracer: F64
+0 flips 23581/27639 bitwise (same count as pre-change), F32 in the 14c
+band; the fused path is heap-free (the standing @allocated test covers it).
+
+**A/B (interleaved in-process via the env seam, 768×576 cube probe).**
+Kernel F32: 0.2132 vs 0.2133 (handoff=1024), 0.3427 vs 0.3448 (handoff=0)
+— **NEUTRAL**. CPU recursive F64 1.831 vs 1.880 (**−2.6%**), CPU wavefront
+F32 1.159 vs 1.197 (**−3.2%**). Spill footprint 13,952 → 14,080 B/thread
+(+128, noise). Wall showed a spurious ±5–10% swing that reverses with rep
+order — whichever variant runs *second* in an in-process rep pair wins wall
+while kernel stays position-stable; straggler drift ruled out (unresolved
+181/181 identical, 3/442368 pixels differ). **Protocol refinement:
+in-process A/B needs ABBA ordering (or kernel + work-equality checks) for
+wall conclusions.**
+
+**Why the pre-registered −15–30% kernel was falsified.** The lane cut
+(10→8) lives in the tower's *outputs and accumulators*; the spilled working
+set that gates the kernel is the corner-loop *transient* — the 30-scalar pd
+tuples, wirtinger intermediates, and CJet chain — which fusion at the
+output-lane level does not touch (footprint unchanged confirms). The 19b
+census located the traffic correctly (flow6 interior) but output-lane count
+was the wrong proxy for interior live width. Assessed and declined: an
+in-loop directional Horner (8-lane accumulators + contracted pd transient)
+attacks ~5% of interior width — not worth the bespoke recurrences while the
+gate sits in the wirtinger/corner transients that order-3-with-4-corners
+needs regardless.
+
+**Verdict: keep.** CPU-positive (offline renders benefit directly),
+meaning-carrier simpler (the Gauss form retired the four sym-matrix
+gradients from the geodesic path), the oracle is retained and reversion is
+one body swap, and the directional machinery is the natural substrate for
+item 1's Jacobi/deviation work (κ needs exactly this kind of
+along-the-ray contraction). Device execution's next real lever is (c)
+pool-init overlap: the ~0.2 s wall−kernel gap now dwarfs anything left in
+the kernel at this workload.
+
 ## 2026-08-01 — deep-fusion opener: the EL contraction collapses further to the Gauss formula; the fused tower needs 8 lanes, not 9–10
 
 **The identity.** Working item 3(d)'s EL form through the collar structure
