@@ -403,6 +403,16 @@ end
         @test maximum(abs, [sa.pos - sb.pos; sa.vel - sb.vel]) < 1e-11
     end
 
+    # the Gauss-formula form of the acceleration agrees with the general law
+    # wherever the metric is exactly the outer pullback (d ≤ 0)
+    for (pos, vel) in (([0.2, 0.15, -0.1], [0.1, 0.2, 0.3]),
+                       ([-0.25, 0.1, -0.02], [-0.4, 0.1, -0.2]),
+                       ([0.05, -0.2, -0.3], [0.3, -0.5, 0.7]))
+        v = J.SituatedPhase(c, pos, vel)
+        a_ref = R.geodesic_accel(nothing, v)
+        @test maximum(abs, R.pullback_accel(nothing, v) - a_ref) < 1e-10 * max(1, maximum(abs, a_ref))
+    end
+
     # transitions and settling agree
     vfar = J.SituatedPhase(c, [0.5, 0.05, 0.2], [0.1, 0.2, 0.3])
     for offset in 0:(J.valence(c) - 1)

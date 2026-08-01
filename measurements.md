@@ -4,6 +4,59 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-08-01 — deep-fusion opener: the EL contraction collapses further to the Gauss formula; the fused tower needs 8 lanes, not 9–10
+
+**The identity.** Working item 3(d)'s EL form through the collar structure
+before building: with g = JᵀJ (J = ∂c, the collar jacobian — outer metric),
+the contraction w_u = v^i v^j (∂_i g_uj − ½ ∂_u g_ij) collapses past the
+plan's sketch. Using ∂_i e_u = ∂_u e_i (mixed partials of c),
+v^iv^j ∂_i g_uj = (∂_u D_v c)·(D_v c) + e_u·(D_v D_v c) while
+½ ∂_u(vᵀgv) = (∂_u D_v c)·(D_v c) — the first-derivative-of-J terms cancel
+exactly, leaving
+
+    w = Jᵀ (D_v D_v c),    a = −(JᵀJ)⁻¹ w
+
+— the Gauss formula: geodesic acceleration of a flat pullback is the
+tangential projection of the ambient second derivative. Pointwise algebra on
+g = JᵀJ, no immersion assumption, so it holds at any d where outer_metric is
+in play (including as the g_o arm inside the blend).
+
+**Probe** (disposable, method): cube throat with non-unit ThroatParams
+(1.3, 0.9, 0.5, 0.75), charts 1/3/6 × 8 random (uv, vel) × depths spanning
+all three branches; reference-AD implementations of (1) the EL restatement
+a = g⁻¹(½∇(vᵀgv) − D_v(gv)) everywhere, (2) the Gauss form at d ≤ 0,
+(3) the blend-region decomposition w = ω·w_o + (1−ω)·w_i +
+(D_vω)(g_o v − g_i v) − ½(ω′/cd)(vᵀg_o v − vᵀg_i v)·ê_d with w_o the Gauss
+form and w_i the inner contraction. Worst relative deviation vs
+Reference.geodesic_accel: EL 1.4e-13, Gauss 6.2e-15, blend 7.3e-15.
+
+**What it does to the lane count.** The plan's "v-contracted lanes instead
+of all 10 partials" over-promised and its 9-lane refinement under-promised;
+the true requirement per surface component is 8 lanes: full Jet2
+{f, fu, fv, fuu, fuv, fvv} (J needs n̂, nu, nv fully, hence full seconds —
+that floor is real: g must invert) + two *doubly*-contracted third lanes
+{D_wD_w su-lane, D_wD_w sv-lane}, since thirds enter only through
+D_v D_v c = D_wD_w s − d·D_wD_w n̂ − 2 v_d·D_w n̂ (w = uv-part of vel; d
+enters exactly as always). The (g, dgu, dgv, dgd) sym-matrix layer of
+outer_metric_gradient disappears from the geodesic path entirely; the inner
+arm needs no third derivatives at all (g_i is d-free and built from firsts,
+so its contracted gradient closes on seconds); the blend arm is the linear
+combination above, whose extra ingredients (g_o v, g_i v, vᵀg_o v, vᵀg_i v,
+ω, ω′) all come from objects already in hand. Landed in reference.jl as
+`pullback_accel` (the meaning-carrier for the fusion) + 3 outer-region
+equivalence tests; 454 cold green.
+
+**Calibrated expectation for the build** (recorded before measuring, per
+protocol): tower width 10 → 8 lanes (−20%) at the fat layers (pd, wirtinger
+outputs, accumulators, jdiv), with the census's spill leverage — traffic
+rides the excess over the 255-register cap, not total width — amplifying
+that by roughly ×(width/excess); plus the FLOP cut is concentrated in the
+most expensive lanes (order-3 compose1/leibniz/jdiv terms, wirtinger
+D30/D21). The census's "~90% of traffic is the tower" bounds the win from
+above; this is not a 90% lever. Honest guess: kernel −15–30%, CPU −10–20%;
+wall moves half the kernel's move on the static probe (kernel is ~0.21 of
+0.40 s post-handoff).
+
 ## 2026-07-19c — production has always run fixed-RK4 (dopri is test-only); the tail handoff lands: static-probe wall −20%, small frames flip to the device; k1 reuse is free but optimizes a dead branch
 
 **The discovery.** The k1-reuse rider went in first (dopri_step gains a k1

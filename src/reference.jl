@@ -128,6 +128,29 @@ function geodesic_accel(env, v::SituatedPhase)
     -(mf(v.pos) \ w)
 end
 
+"""
+the same acceleration where g is exactly the flat pullback g = JᵀJ of the
+collar map (the outer metric, d ≤ 0): contracting w through the symmetry
+∂_i e_u = ∂_u e_i of the collar's second derivatives cancels every
+first-derivative-of-J term, leaving the tangential projection of the ambient
+second derivative — the Gauss formula for geodesics of an embedded metric:
+
+    w = Jᵀ (D_v D_v c),    a = −(JᵀJ)⁻¹ w
+
+So third derivatives of the surface enter the geodesic flow only doubly
+contracted with the velocity; the same cancellation applied per blend arm
+(g_o exactly, g_i needing no thirds at all) is what the fused production
+tower (plan item 3d) is built on. Pointwise algebra on g = JᵀJ — no
+immersion assumption, so the identity holds wherever outer_metric is the
+metric.
+"""
+function pullback_accel(env, v::SituatedPhase)
+    cl = p -> collar(env, v.chart, p)
+    jac = jacobian(cl, v.pos)
+    ddc = directional(p -> directional(cl, p, v.vel), v.pos, v.vel)
+    -((jac' * jac) \ (jac' * ddc))
+end
+
 function geodesic_flow(env, v::SituatedPhase)
     (v.vel, geodesic_accel(env, v))
 end
