@@ -21,9 +21,8 @@ fly-through video.
 
 Certification state: 782 tests cold green (451 + the 2026-08-01 pullback
 and directional-jet batteries); `scripts/physics_diff.jl` passes its
-baselines (0 side flips; baselines re-saved 2026-07-19 at the Γ-fusion
-moment; since the 2026-08-01 fused accel deviations read in-band
-5.6e-15/7.1e-11 — re-save pending kaarel's call);
+baselines (0 side flips; baselines re-saved 2026-08-01 at the fused-accel
+moment with kaarel's blessing, deviations read 0);
 `scripts/precision_diff.jl` is the standing F32
 acceptance instrument and reproduces its accepted shape. The oracle tiering
 holds: reference.jl is the sole semantic ground truth; production is
@@ -236,14 +235,20 @@ Unordered, as wanted:
   should be real-time flying controls — either a GPU build or a lighter
   schematic view with realtime control; not a near-term design driver, but
   see the reordering trigger in item 3.
-- **Retire served bit-identity pins** (agreed 2026-07-17): bit-identity is
-  a landing instrument, not a permanent semantics; once a restructure's
-  equivalence is proven, either merge the twins (a shared body keeps
-  identity by construction — sweep_ray ↔ trace_geodesic's duplicated
-  integrator loops are the standing case) or downgrade the pinned equality
-  test to the physics_diff tolerance band. Tied to it: decide whether the
-  recursive renderer is a production path or a certification twin, and
-  label it accordingly.
+- **Retire served bit-identity pins / prune the certification surface**
+  (agreed 2026-07-17; broadened 2026-08-01 by kaarel's growing unease at
+  the code and test volume): bit-identity is a landing instrument, not a
+  permanent semantics; once a restructure's equivalence is proven, either
+  merge the twins (a shared body keeps identity by construction —
+  sweep_ray ↔ trace_geodesic's duplicated integrator loops are the
+  standing case) or downgrade the pinned equality test to the physics_diff
+  tolerance band. Tied to it: decide whether the recursive renderer is a
+  production path or a certification twin, and label it accordingly. The
+  2026-08-01 additions are candidates once the fused path has settled: the
+  328 DJet op-level contraction tests were landing scaffolding (a thin
+  surface_djet-vs-surface_jet + accel-vs-oracle set may suffice), and the
+  accel now has three bodies (fused / gradient oracle / AD twin) where
+  two tiers might do.
 - **Tabulated Γ** (probed 2026-07-14, demoted — accuracy is
   corner-blend-limited, gated on the representation fork).
 - Multi-mouth ambient spaces need nearest-entry selection across mouths
