@@ -213,6 +213,19 @@ renders (flyvideo gpu=1).
      their sweep window closes. Up to ~1.5x of issued work recoverable;
      knobs are sweep size vs round overhead and compaction cadence.
      Cheap A/B probes before any restructuring.
+   - (g) **rematerialization probe** (post-wrap addendum, 2026-08-01c
+     discussion): trade spilled *holds* for *recomputation* in the
+     corner loop — the pebbling space-time tradeoff, distinct from the
+     ruled-out register caps (those convert holds to spills, not
+     recomputes; the allocator never leaves that corner and can't — FP
+     algebraic rewrites are off-limits to it under IEEE semantics, so
+     narrowing liveness is a source-level move). The profile makes the
+     exchange rate unusually favorable: ALUs at 20% while spill-load
+     scoreboard is 61% of warp wait — recompute is paid in an idle
+     currency. Open question is whether the corner-loop DAG has
+     profitable pebbling moves at all; probe at the source level,
+     certify bit-identical (recomputation of the same expressions is
+     bit-stable).
    - (e) **Integrator economy — reframed 2026-07-19c**: production is
      *already* the cheap fixed-step RK4 integrator (h = 0.05 constant, no
      h cap, no error controller — those live in the test-only dopri
