@@ -4,6 +4,75 @@ Findings worth not re-deriving, but which don't change the working plan.
 Probe scripts are deliberately disposable (they'd be rewritten against changed
 code anyway); enough method detail lives here to reconstruct them.
 
+## 2026-08-01c — first ncu profile: the kernel is latency-bound at register-pinned occupancy, NOT bandwidth-bound; the two NEUTRAL fusions are mechanically explained; the 33 ms round floor is a 29-block grid
+
+**Method.** Nsight Compute 2026.2.1 on the standing 768×576 F32 cube probe
+(disposable script re-creating gpu_tracer's scene; `-k regex:kernel_sweep`).
+GPU perf counters needed unrestricting (NVIDIA's cap-device Quick Start
+script grants access *for the current boot only* — `/dev/nvidia-caps` is
+devtmpfs, so a reboot erases it; the persistent method is still the
+`NVreg_RestrictProfilingToAdminUsers=0` modprobe regkey + `mkinitcpio -P`,
+untested here). Watchdog constraint: this GPU drives the display, and ncu's
+SASS-patching passes (`--set full` SW/LOP counters) stretch the 0.2 s
+kernel past the ~2 s watchdog → CUDA error 702; the working recipe is
+`--set detailed` at 384×288 plus HW-counter sections only
+(SpeedOfLight/Occupancy/SchedulerStats/WarpStateStats/WorkloadDistribution/
+LaunchStats) at 768×576. ncu locks clocks to base (2.5 GHz), so durations
+run ~15% over production; the ratios are the payload. `-c 2` captures
+rounds 1–2 (at 384×288 round 2 falls under handoff — round 1 only).
+
+**The numbers (768×576 round 1: 65,152 rays, 509 blocks × 128, 4.5 waves,
+197.8 ms at base clock).** Unit utilizations: SM 19.6%, L1/TEX 31.2%,
+L2 48.7%, DRAM 35.1% — **nothing is near saturation**. Occupancy:
+theoretical 16.7% (255 regs/thread → 2 blocks/SM → 8 warps of the 48 the
+SM can host), achieved 12.0%. Schedulers: 1.60 active warps/scheduler,
+0.14 eligible, **no-eligible 87% of cycles** (an issue every ~8 cycles).
+Warp state: 12.4 cycles between issues per warp, **61% of it L1TEX
+scoreboard** — waiting on local (= spill; stack is 14,080 B/thread) loads.
+Divergence: **20.5 of 32 lanes active** on average, with bin=true (at
+384×288 it's 16.9). SMs are 95% *active* during round 1 (busy-but-stalled;
+the partial-wave idle only bites small frames — 33% SM-idle at 384×288's
+1.14 waves). Roofline: ~1% of FP32 peak; FP64 leakage checked and
+negligible (~2% of the 1:64 FP64 peak).
+
+**Round 2 measured directly (3,649 rays, 29 blocks, 0.26 waves): 33.7 ms**
+— the census's per-round latency floor, decomposed: half the SMs idle,
+occupancy 7.8%, 8.25 lanes/warp, DRAM 6%. A mostly-idle machine marching
+stragglers; the handoff's rationale, seen from the device side.
+
+**The standing diagnosis is falsified.** "Bandwidth-bound on its own
+local-memory traffic" predicted a saturated memory subunit; there is none.
+The kernel is **latency-bound**: too few warps (register-file-pinned at 8/SM)
+to hide the spill-load dependency chains, and the schedulers idle 87% of
+cycles. This mechanically explains both NEUTRAL fusion results
+(2026-07-19, 2026-08-01b): FLOP and lane cuts shorten neither the
+spill-chain latency per instruction nor add warps — they remove work from
+pipes that were idle anyway. Byte-traffic censuses were the wrong model
+for the same reason: traffic volume prices a bandwidth-bound kernel, not a
+latency-bound one.
+
+**What raises throughput, in this order** (the why-chain for
+reprioritizing item 3):
+1. **Fill the idle machine with independent work.** Round-2-class
+   launches (DRAM 6%), inter-round host gaps, and the ~0.19 s pool-init
+   gap are all overlappable with *other frames'* work — offline rendering
+   has hundreds of independent frames. Co-resident blocks share the 64K
+   register file, so concurrency does NOT raise warps/SM during
+   round-1-class saturation — the win is filling tails, gaps, and host
+   stages, honestly ~1.5–2x at the flyvideo level, bounded by L2/DRAM
+   headroom (~2x) if kernels overlap substantially. Item 3(c) is the
+   degenerate single-frame case of this pipeline.
+2. **Divergence**: 20.5/32 lanes → up to ~1.5x on issued work if
+   compaction/sweep granularity recovers idle lanes (early-exiting rays
+   idle until their sweep window ends).
+3. **Registers per thread** is the only lever on warps/SM: ≤170 regs →
+   3 blocks/SM (+50% warps), ≤128 → 4 (2x). Register *caps* just convert
+   registers to spill (ruled out 2026-07-18); only genuinely narrower
+   live width gets there — which is the representation fork's corner-blend
+   elimination, now re-coupled to GPU perf with a quantified mechanism.
+4. FLOP/lane micro-fusions: confirmed dead on the kernel (twice measured,
+   now explained). CPU-side value unaffected.
+
 ## 2026-08-01b — deep fusion lands certified and kernel-NEUTRAL: the spill gate is the corner-loop transient set, not the tower's output lanes; CPU −3%; a wall position-artifact refines the A/B protocol
 
 **What landed.** The 8-lane directional algebra (`DJet` in jets.jl: full

@@ -47,16 +47,20 @@ KB/thread. The straggler tail (a ~33 ms/round latency floor, 37% of
 kernel for <1% of rays) is handed to host threads since 2026-07-19c
 (DeviceSweep defaults handoff=1024, threads=128), which also flips the
 small-frame conclusion: device F32 beats CPU at 192×144 (0.051 vs 0.078
-wall, raymap level). Standing diagnosis: the kernel is bandwidth-bound on
-its own local-memory traffic, NOT occupancy-limited (register caps always
-lose); ~90% of per-attempt local traffic is the stage tower's interior —
-live width exceeds the 255-register cap and spills; call structure is no
-longer a factor, and FLOP cuts alone don't move the kernel. Deep fusion
-(2026-08-01) sharpened the diagnosis: the gate is the corner-loop
-*transient* set (pd tuples, wirtinger intermediates), which output-lane
-fusion can't touch — the fused Gauss-form accel landed kernel-NEUTRAL,
-CPU −3%, kept for the CPU win, the simpler meaning-carrier, and as the
-substrate for item 1's deviation machinery. Device
+wall, raymap level). Standing diagnosis (ncu, measurements.md 2026-08-01c
+— supersedes 07-19b's "bandwidth-bound on local traffic"): the kernel is
+**latency-bound at register-pinned occupancy** — 255 regs/thread admits
+only 8 of the SM's 48 warp slots (12% achieved occupancy), 61% of warp
+wait is spill-load scoreboard, 20.5/32 lanes active under divergence, and
+no memory unit is near saturation (DRAM 35%, L2 49% at production size).
+This mechanically explains the two kernel-NEUTRAL fusions: FLOP/lane cuts
+feed pipes that idle anyway; the byte-traffic census priced a
+bandwidth-bound kernel we don't have. Kernel-side FLOP/lane micro-fusion
+is CLOSED as a lever. The corner-loop transient set (pd tuples, wirtinger
+intermediates) remains the culprit, recast: it is the *live width* that
+pins registers at the cap and forces the spill chains. The fused
+Gauss-form accel stays for the CPU win, the simpler meaning-carrier, and
+as item-1 substrate. Device
 benchmark protocol: kernel numbers don't reproduce across sessions (clock
 state) — A/B same-day, interleaved, ≥2 full-size warm passes, min-of-reps;
 wall is the honest metric (host tail time is deliberately outside
@@ -186,14 +190,29 @@ renders (flyvideo gpu=1).
    the simpler meaning-carrier, and as item-1 substrate. kernel_sweep now
    threads env (the seam reaches the device). A/B protocol refinement:
    in-process wall comparisons need ABBA ordering (position artifact
-   ±5–10%; kernel numbers are position-robust). **Next: (c).**
-   - (c) **pool-init overlap** — the wall-kernel gap (~0.2 s at 768×576,
-     the probe workload's biggest single item post-handoff, now dwarfing
-     anything left in the kernel at this workload) is the initial 442k
-     F64 entry solves + device throat build, pipelinable against round 1
-     (or an in-kernel entry solve; the F64 host solve was a design
-     convenience, never a requirement). nsys timelines are the
-     instrument.
+   ±5–10%; kernel numbers are position-robust). The 2026-08-01c ncu
+   profile (first direct look; permission setup is boot-scoped, see
+   measurements method note) re-ranked the remaining levers for the
+   offline-throughput endpoint (kaarel's priority, 2026-08-01):
+   **Next: (c), in its cross-frame form.**
+   - (c) **cross-frame pipeline** (generalizes the old pool-init-overlap
+     item; single-frame overlap is its degenerate case). The ncu profile
+     shows the device idle or near-idle across round-2-class launches
+     (29 blocks, DRAM 6%), inter-round host gaps, and the ~0.19 s
+     pool-init gap — all fillable with *other frames'* independent work
+     in offline rendering (per-task streams; host entry solves for frame
+     N+1 under device rounds of frame N). Honest expectation ~1.5–2x at
+     the flyvideo level; co-resident blocks share the register file, so
+     concurrency fills tails/gaps but cannot raise warps/SM during
+     round-1 saturation. nsys timelines are the instrument. (An
+     in-kernel entry solve remains an alternative for the single-frame/
+     realtime case; the F64 host solve was a design convenience, never a
+     requirement.)
+   - (f) **divergence / sweep granularity probe** (new, 2026-08-01c):
+     20.5/32 lanes active with bin=true — early-exiting rays idle until
+     their sweep window closes. Up to ~1.5x of issued work recoverable;
+     knobs are sweep size vs round overhead and compaction cadence.
+     Cheap A/B probes before any restructuring.
    - (e) **Integrator economy — reframed 2026-07-19c**: production is
      *already* the cheap fixed-step RK4 integrator (h = 0.05 constant, no
      h cap, no error controller — those live in the test-only dopri
@@ -219,7 +238,9 @@ Unordered, as wanted:
 - **Representation fork** (own section below): the live design decision.
   Not on any critical path since direct F32 christoffel beat tabulation
   accuracy in-kernel (2026-07-14b); remains the CPU-perf / elegance
-  question, on kaarel's clock. Item 2 above leans on it only softly.
+  question, on kaarel's clock — but re-coupled to GPU perf 2026-08-01c
+  as the sole lever on kernel occupancy (see the fork section). Item 2
+  above leans on it only softly.
 - **Silhouette tightening**: tessellation-only first-hit gives a polygonal
   wormhole outline (spurious rim misses). `Mouth` is an abstract interface
   ready for a second strategy (outward-offset tessellation, or a
@@ -267,7 +288,14 @@ representation choices; all plausible paths in one place, kaarel to pick.
 **Scope narrowed 2026-07-14b**: the fork no longer gates the GPU port
 (direct F32 AD christoffel beats the tables' accuracy in-kernel at
 acceptable speed — measurements.md 2026-07-14b); it remains live as the
-CPU-perf / representation-elegance question, on kaarel's clock:
+CPU-perf / representation-elegance question, on kaarel's clock.
+**Re-coupled to GPU perf 2026-08-01c**: the ncu profile pins kernel
+occupancy at 8 of 48 warps/SM via 255 regs/thread, and the register
+demand is the corner-blend live width — option 2's affine transitions
+eliminate corner blending entirely, the only identified path to
+≤170 regs (3 blocks/SM, +50% warps) or ≤128 (4 blocks, 2x). The fork is
+now the sole lever on kernel occupancy, though not on any near-term
+critical path:
 
 1. **Stay YZ + C⁴ corner blend** (kaarel's lean *if* tabulation on the
    current representation proceeds). Nonic smootherstep corner blend: sector
