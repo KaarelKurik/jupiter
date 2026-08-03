@@ -112,7 +112,10 @@ renders (flyvideo gpu=1).
    antialiasing. The keystone item: κ is simultaneously the shimmer answer
    (the filament is image-space aliasing), the trust criterion the caches
    below need, and the endgame F32→F64 fallback flag (passage count stays
-   the cheap ordinal until then). Backend-agnostic (CPU video renders drop
+   the cheap ordinal until then). This is the item that owns the expensive
+   rays (kaarel, 2026-07-13): they are limit-cycle rays on the boundary
+   between the two ambient images — the unresolved pixels — not grazing
+   hits, and that same boundary is where fly-through chaotic shimmer lives. Backend-agnostic (CPU video renders drop
    from hours toward minutes) and representation-agnostic (survives the
    fork) — highest information value, no dependencies. Design notes from
    the 2026-07-18 DNGR discussion (kaarel checked the paper: DNGR bundles
@@ -257,11 +260,12 @@ Unordered, as wanted:
 - **Silhouette tightening**: tessellation-only first-hit gives a polygonal
   wormhole outline (spurious rim misses). `Mouth` is an abstract interface
   ready for a second strategy (outward-offset tessellation, or a
-  conservative bound + Newton). Related but distinct (kaarel, 2026-07-13):
-  the *expensive* rays are limit-cycle rays on the boundary between the two
-  ambient images — the unresolved pixels — not grazing hits; that boundary
-  is also where fly-through chaotic shimmer lives (image-space aliasing →
-  the ray-bundles item).
+  conservative bound + Newton). Purely an outline-fidelity item, with no
+  bearing on unresolved pixels or shimmer (kaarel, 2026-08-03): what the
+  silhouette resolves is grazing rays, and on convex silhouettes those are
+  barely deflected however they are resolved — measured, δ < 0.001° until
+  the ray's deepest point reaches ~25% of cylinder_depth (measurements.md
+  2026-07-11). The expensive rays live elsewhere; see item 1.
 - **David mesh path**: res/models/*.stl are triangles; fit_geometry assumes
   quads, so one CC pre-subdivision or a quad remesh comes first; also STL
   loading. (`scripts/david.jl` scaffolding is in kaarel's working copy.)
